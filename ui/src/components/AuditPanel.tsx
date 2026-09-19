@@ -179,22 +179,22 @@ function CallDrawer({
           </Card>
           <Card title="the questions asked" note="every one is a noul, a choice or a score">
             <div className="scroll-box">
-              <pre>{JSON.stringify(data.asks, null, 2)}</pre>
+              <Json value={data.asks} />
             </div>
           </Card>
           <Card title="the verdicts returned" note="this is all jev produced">
             <div className="scroll-box">
-              <pre>{JSON.stringify(data.verdicts, null, 2)}</pre>
+              <Json value={data.verdicts} />
             </div>
           </Card>
           <Card title="the typed output" note="composed deterministically from those verdicts">
             <div className="scroll-box">
-              <pre>{JSON.stringify(data.output, null, 2)}</pre>
+              <Json value={data.output} />
             </div>
           </Card>
           <Card title="the state that was judged" note="what a live model would see, exactly">
             <div className="scroll-box">
-              <pre>{JSON.stringify(data.state, null, 2)}</pre>
+              <Json value={data.state} />
             </div>
           </Card>
         </div>
