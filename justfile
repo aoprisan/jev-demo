@@ -33,6 +33,29 @@ demo-battery *ARGS:
 demo-battery-mock *ARGS:
     cargo run --release -p cli -- battery --mock {{ARGS}}
 
+# Build the UI, then serve it and the API from one process on :8787.
+desk: ui-build serve
+
+# The HTTP API, offline. Serves ui/dist when it has been built.
+serve *ARGS:
+    cargo run --release -p server -- {{ARGS}}
+
+# The same, defaulting to the live System One API. Needs TYPESAFE_API_KEY.
+serve-live *ARGS:
+    cargo run --release -p server -- --live {{ARGS}}
+
+# The Vite dev server on :5173, proxying /api to a running `just serve`.
+ui-dev:
+    cd ui && npm install && npm run dev
+
+# Build the UI into ui/dist, which `just serve` picks up.
+ui-build:
+    cd ui && npm install && npm run build
+
+# Typecheck the UI without building it.
+ui-check:
+    cd ui && npm install && npm run check
+
 # The whole test suite. Offline by construction: no test calls the live API.
 test *ARGS:
     cargo test --workspace {{ARGS}}
@@ -49,11 +72,14 @@ prompts:
 schemas:
     cargo run --release -p cli -- schemas
 
-# Format, lint and test.
+# Format, lint and test the workspace.
 check:
     cargo fmt --all --check
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
+
+# The same, plus the UI's typecheck. Needs node.
+check-all: check ui-check
 
 fmt:
     cargo fmt --all
@@ -61,3 +87,7 @@ fmt:
 # Remove generated reports and audit logs.
 clean-out:
     rm -rf out
+
+# Remove the UI's build output and its dependencies.
+clean-ui:
+    rm -rf ui/dist ui/node_modules
