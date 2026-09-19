@@ -21,3 +21,4 @@ typesafe-ai-sdk.workspace = true
 [dev-dependencies]
 anyhow.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
+wiremock = "0.6"

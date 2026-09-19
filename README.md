@@ -294,11 +294,15 @@ so adding a headline does not shift the prices generated after it.
 just test     # offline by construction; no test calls the live API
 ```
 
-Covering synth determinism by seed and the shape of both worlds; the strategy
-and the solver on fixed fixtures with hand-computed expectations; each
+145 tests, covering synth determinism by seed and the shape of both worlds; the
+strategy and the solver on fixed fixtures with hand-computed expectations; each
 primitive's schema validation rejecting bad output; the mock's rules stated
 against the specification they implement; both engines' P&L on tiny fixtures;
-and that the pipeline passes prior outputs into later stages correctly.
+that the pipeline passes prior outputs into later stages correctly; that no
+ground truth reaches a judgment call; and the live client's translation in both
+directions, against a stub System One server.
+
+`just check` additionally runs `cargo fmt --check` and `clippy -D warnings`.
 
 ## `MockJev`
 

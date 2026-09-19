@@ -39,6 +39,14 @@ impl LiveJev {
         Ok(Self { client, model: None, timeout: None })
     }
 
+    /// A client over an already-built SDK client.
+    ///
+    /// Useful for pointing the backend at a stub server in tests, and for
+    /// callers that configure retries, proxies or headers themselves.
+    pub fn new(client: Client) -> Self {
+        Self { client, model: None, timeout: None }
+    }
+
     /// Pin a model, e.g. `jev-latest`.
     pub fn model(mut self, model: impl Into<String>) -> Self {
         self.model = Some(model.into());
