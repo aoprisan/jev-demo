@@ -233,7 +233,18 @@ function BatteryDayDrawer({
   const { data, error, loading } = useFetch(() => getBatteryDay(runId, day), `${runId}/${day}`);
 
   return (
-    <Drawer title={`day ${day}`} onClose={onClose}>
+    <Drawer
+      title={`day ${day}`}
+      actions={
+        data &&
+        onShowCalls && (
+          <button className="btn ghost" onClick={() => onShowCalls(data.row.decision_id)}>
+            jev calls ({num(data.row.calls)}) →
+          </button>
+        )
+      }
+      onClose={onClose}
+    >
       {loading && <Empty>reading the day…</Empty>}
       {error && <Banner kind="bad">{error}</Banner>}
       {data && (

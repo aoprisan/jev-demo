@@ -267,7 +267,18 @@ function FxDecisionDrawer({
   );
 
   return (
-    <Drawer title={`decision ${index}`} onClose={onClose}>
+    <Drawer
+      title={`decision ${index}`}
+      actions={
+        data &&
+        onShowCalls && (
+          <button className="btn ghost" onClick={() => onShowCalls(data.row.decision_id)}>
+            jev calls ({num(data.row.calls)}) →
+          </button>
+        )
+      }
+      onClose={onClose}
+    >
       {loading && <Empty>reading the decision…</Empty>}
       {error && <Banner kind="bad">{error}</Banner>}
       {data && (

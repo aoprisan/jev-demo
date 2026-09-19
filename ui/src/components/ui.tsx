@@ -190,10 +190,13 @@ export function KeyValue({ rows }: { rows: [string, ReactNode][] }) {
 /** A right-hand drawer. Closes on Escape and on a click outside it. */
 export function Drawer({
   title,
+  actions,
   onClose,
   children,
 }: {
   title: ReactNode;
+  /** Buttons shown in the header, before the close button. */
+  actions?: ReactNode;
   onClose: () => void;
   children: ReactNode;
 }) {
@@ -215,9 +218,12 @@ export function Drawer({
       >
         <header className="drawer-head">
           <h2 style={{ fontSize: 14 }}>{title}</h2>
-          <button className="btn ghost" onClick={onClose}>
-            close (esc)
-          </button>
+          <span style={{ display: "flex", gap: 8 }}>
+            {actions}
+            <button className="btn ghost" onClick={onClose}>
+              close (esc)
+            </button>
+          </span>
         </header>
         {children}
       </aside>
