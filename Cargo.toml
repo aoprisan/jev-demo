@@ -7,6 +7,7 @@ members = [
     "crates/battery",
     "crates/report",
     "crates/cli",
+    "crates/server",
 ]
 
 [workspace.package]
@@ -25,6 +26,7 @@ report = { path = "crates/report" }
 
 anyhow = "1.0"
 async-trait = "0.1"
+axum = "0.8"
 clap = { version = "4.5", features = ["derive"] }
 indexmap = { version = "2", features = ["serde"] }
 schemars = "0.8"
@@ -32,6 +34,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tower = "0.5"
+tower-http = { version = "0.7", features = ["fs", "trace", "cors", "compression-gzip"] }
 tracing = "0.1"
 typesafe-ai-sdk = "0.2"
 

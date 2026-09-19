@@ -195,3 +195,12 @@ pub fn without_grid_notices(world: &BatteryWorld, day: u32) -> BatteryWorld {
     clone.grid_notes.retain(|n| n.day != day);
     clone
 }
+
+/// The first day inside `horizon` that carries no grid note.
+///
+/// The replay adds a notice to a day that had none, so the difference between
+/// the two runs is the notice and nothing else. Returns `None` when every day
+/// already carries one.
+pub fn first_quiet_day(world: &BatteryWorld, horizon: u32) -> Option<u32> {
+    (0..horizon.min(world.days)).find(|d| world.grid_notes_on(*d).is_empty())
+}

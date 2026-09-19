@@ -192,3 +192,17 @@ pub fn added_currency(pair: Pair, side: crate::strategy::Side) -> Currency {
         crate::strategy::Side::Short => pair.quote(),
     }
 }
+
+/// How the features' next release reads on a report: `"CPI in 0.4h"`, or
+/// `"none scheduled"` when nothing is close enough to matter.
+///
+/// Shared so the terminal replay and the HTTP API describe the same distance
+/// the same way.
+pub fn event_label(features: &FxFeatures) -> String {
+    match features.next_event_kind.as_deref() {
+        Some(kind) if features.hours_to_event < 72.0 => {
+            format!("{kind} in {:.1}h", features.hours_to_event)
+        }
+        _ => "none scheduled".to_owned(),
+    }
+}
