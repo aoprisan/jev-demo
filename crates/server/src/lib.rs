@@ -15,7 +15,7 @@ pub mod routes;
 pub mod run;
 pub mod store;
 
-use axum::http::StatusCode;
+use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Router;
 use std::path::PathBuf;
@@ -24,6 +24,7 @@ use store::RunStore;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
+use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
 /// How the server is configured.
@@ -73,7 +74,14 @@ impl AppState {
 
 /// The whole application: the API, and the UI when one is built.
 pub fn router(state: AppState) -> Router {
-    let mut app = Router::new().nest("/api", routes::api());
+    // Every API answer is the state of a run *now*; a poll that comes back
+    // from a cache is a lie. `no-store` keeps browsers, proxies and any
+    // service worker another app left on this origin from replaying one.
+    let api = routes::api().layer(SetResponseHeaderLayer::overriding(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    ));
+    let mut app = Router::new().nest("/api", api);
 
     if let Some(dir) = state.config.ui_dir.clone() {
         // A single-page app: anything the API did not claim falls back to

@@ -16,17 +16,29 @@ import { Banner, Card, Drawer, Empty } from "./ui";
 
 const PAGE = 100;
 
-export function AuditPanel({ runId, calls }: { runId: string; calls: number }) {
+export function AuditPanel({
+  runId,
+  calls,
+  decision = null,
+  onShowAll,
+}: {
+  runId: string;
+  calls: number;
+  /** Narrow the log to the calls tagged with this decision, e.g. `fx:0011`. */
+  decision?: string | null;
+  /** Lift the narrowing; shown as the chip beside the title. */
+  onShowAll?: () => void;
+}) {
   const [offset, setOffset] = useState(0);
   const [open, setOpen] = useState<number | null>(null);
   const { data, error } = useFetch(
-    () => getCalls(runId, offset, PAGE),
-    `${runId}/${offset}/${calls}`,
+    () => getCalls(runId, offset, PAGE, decision),
+    `${runId}/${decision ?? "*"}/${offset}/${calls}`,
   );
 
   if (error) return <Banner kind="bad">{error}</Banner>;
   if (!data) return <Empty>reading the audit log…</Empty>;
-  if (data.total === 0) return <Empty>no calls recorded yet.</Empty>;
+  if (data.total === 0 && decision === null) return <Empty>no calls recorded yet.</Empty>;
 
   const last = Math.min(offset + PAGE, data.total);
 
@@ -34,13 +46,25 @@ export function AuditPanel({ runId, calls }: { runId: string; calls: number }) {
     <div className="stack">
       <Card
         title="typed calls"
-        note={`${num(data.total)} in this run`}
+        note={
+          decision === null
+            ? `${num(data.total)} in this run`
+            : `${num(data.total)} behind decision ${decision}`
+        }
         right={
-          <a className="btn ghost" href={decisionsUrl(runId)} download>
-            decisions.jsonl
-          </a>
+          <span style={{ display: "flex", gap: 8 }}>
+            {decision !== null && onShowAll && (
+              <button className="btn ghost" onClick={onShowAll}>
+                × all {num(calls)} calls
+              </button>
+            )}
+            <a className="btn ghost" href={decisionsUrl(runId)} download>
+              decisions.jsonl
+            </a>
+          </span>
         }
       >
+        {data.total === 0 && <Empty>no call in this run is tagged with {decision}.</Empty>}
         <div className="table-scroll">
           <table>
             <thead>
@@ -69,9 +93,7 @@ export function AuditPanel({ runId, calls }: { runId: string; calls: number }) {
                   <td className="dim">{call.decision ?? "—"}</td>
                   <td>{call.asks}</td>
                   <td className="dim">{call.backend}</td>
-                  <td>
-                    {num((call.input_tokens ?? 0) + (call.output_tokens ?? 0))}
-                  </td>
+                  <td>{num((call.input_tokens ?? 0) + (call.output_tokens ?? 0))}</td>
                   <td className="dim">{ms(call.latency_ms)}</td>
                   <td className="dim">{clock(call.at_ms)}</td>
                 </tr>
@@ -79,25 +101,34 @@ export function AuditPanel({ runId, calls }: { runId: string; calls: number }) {
             </tbody>
           </table>
         </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10 }}>
-          <button
-            className="btn ghost"
-            disabled={offset === 0}
-            onClick={() => setOffset(Math.max(0, offset - PAGE))}
+        {data.total > PAGE && (
+          <div
+            style={{
+              display: "flex",
+              gap: 8,
+              alignItems: "center",
+              marginTop: 10,
+            }}
           >
-            ← previous
-          </button>
-          <span className="dim mono" style={{ fontSize: 11.5 }}>
-            {offset + 1}–{last} of {num(data.total)}
-          </span>
-          <button
-            className="btn ghost"
-            disabled={last >= data.total}
-            onClick={() => setOffset(offset + PAGE)}
-          >
-            next →
-          </button>
-        </div>
+            <button
+              className="btn ghost"
+              disabled={offset === 0}
+              onClick={() => setOffset(Math.max(0, offset - PAGE))}
+            >
+              ← previous
+            </button>
+            <span className="dim mono" style={{ fontSize: 11.5 }}>
+              {offset + 1}–{last} of {num(data.total)}
+            </span>
+            <button
+              className="btn ghost"
+              disabled={last >= data.total}
+              onClick={() => setOffset(offset + PAGE)}
+            >
+              next →
+            </button>
+          </div>
+        )}
       </Card>
 
       {open !== null && <CallDrawer runId={runId} index={open} onClose={() => setOpen(null)} />}

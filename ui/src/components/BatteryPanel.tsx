@@ -46,7 +46,16 @@ function BookRow({ label, book }: { label: string; book: BatteryBook }) {
   );
 }
 
-export function BatteryPanel({ runId, result }: { runId: string; result: BatteryResult }) {
+export function BatteryPanel({
+  runId,
+  result,
+  onShowCalls,
+}: {
+  runId: string;
+  result: BatteryResult;
+  /** Open the audit log narrowed to one day's calls. */
+  onShowCalls?: (decisionId: string) => void;
+}) {
   const [open, setOpen] = useState<number | null>(null);
   const breachesRemoved = result.solver_only.reserve_breaches - result.gated.reserve_breaches;
 
@@ -198,7 +207,12 @@ export function BatteryPanel({ runId, result }: { runId: string; result: Battery
       </Card>
 
       {open !== null && (
-        <BatteryDayDrawer runId={runId} day={open} onClose={() => setOpen(null)} />
+        <BatteryDayDrawer
+          runId={runId}
+          day={open}
+          onClose={() => setOpen(null)}
+          onShowCalls={onShowCalls}
+        />
       )}
     </div>
   );
@@ -209,10 +223,12 @@ function BatteryDayDrawer({
   runId,
   day,
   onClose,
+  onShowCalls,
 }: {
   runId: string;
   day: number;
   onClose: () => void;
+  onShowCalls?: (decisionId: string) => void;
 }) {
   const { data, error, loading } = useFetch(() => getBatteryDay(runId, day), `${runId}/${day}`);
 
@@ -277,6 +293,13 @@ function BatteryDayDrawer({
           <Card
             title="what judging it cost"
             note="every call tagged with this decision"
+            right={
+              onShowCalls && (
+                <button className="btn ghost" onClick={() => onShowCalls(data.row.decision_id)}>
+                  see the {num(data.row.calls)} calls →
+                </button>
+              )
+            }
           >
             <KeyValue
               rows={[

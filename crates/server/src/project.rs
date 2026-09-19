@@ -468,10 +468,24 @@ fn battery_replay(run: &BatteryRun) -> Option<BatteryReplay> {
 // ---------------------------------------------------------------------------
 
 /// One page of the audit log, without the payloads.
-pub fn call_page(records: &[CallRecord], offset: usize, limit: usize) -> CallPage {
-    let calls = records
+pub fn call_page(
+    records: &[CallRecord],
+    decision: Option<&str>,
+    offset: usize,
+    limit: usize,
+) -> CallPage {
+    // Narrowed to one decision, the page walks that decision's calls only;
+    // `index` keeps pointing into the whole log so the detail endpoints
+    // still resolve.
+    let matching = records
         .iter()
         .enumerate()
+        .filter(|(_, r)| decision.is_none_or(|d| r.decision.as_deref() == Some(d)));
+    let total = match decision {
+        Some(_) => matching.clone().count(),
+        None => records.len(),
+    };
+    let calls = matching
         .skip(offset)
         .take(limit)
         .map(|(index, r)| CallRow {
@@ -488,5 +502,5 @@ pub fn call_page(records: &[CallRecord], offset: usize, limit: usize) -> CallPag
             latency_ms: r.latency_ms,
         })
         .collect();
-    CallPage { total: records.len(), offset, calls }
+    CallPage { total, offset, calls }
 }

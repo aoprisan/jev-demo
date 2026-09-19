@@ -283,7 +283,7 @@ behind it rather than a spinner. Then:
 | `GET /api/runs/{id}` | the summary, and the whole result once it is done |
 | `GET /api/runs/{id}/fx/decisions/{i}` | one candidate: the features Jev read, all four stages, the review flag, both fills |
 | `GET /api/runs/{id}/battery/days/{d}` | one day: all three schedules, all five stages, the review flag, both executions |
-| `GET /api/runs/{id}/calls` | the audit log, paged, each row tagged with the decision it judged; `/calls/{i}` is one call in full |
+| `GET /api/runs/{id}/calls` | the audit log, paged, each row tagged with the decision it judged; `?decision=fx:0011` narrows it to one decision's calls; `/calls/{i}` is one call in full |
 | `GET /api/runs/{id}/decisions.jsonl` | the audit log as the CLI writes it, one object per line |
 | `GET /api/runs/{id}/report` | `report.md`, byte for byte |
 | `GET /api/prompts`, `/api/schemas` | the standing guidance and the output schemas |

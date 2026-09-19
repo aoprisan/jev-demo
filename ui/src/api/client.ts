@@ -94,8 +94,17 @@ export const getBatteryDay = (id: string, day: number): Promise<BatteryDayDetail
   request<BatteryDayDetail>(`/runs/${id}/battery/days/${day}`);
 
 /** A page of the audit log. */
-export const getCalls = (id: string, offset: number, limit: number): Promise<CallPage> =>
-  request<CallPage>(`/runs/${id}/calls?offset=${offset}&limit=${limit}`);
+export const getCalls = (
+  id: string,
+  offset: number,
+  limit: number,
+  decision: string | null = null,
+): Promise<CallPage> => {
+  const query = new URLSearchParams({ offset: String(offset), limit: String(limit) });
+  // Narrowed to one decision, the page walks that decision's calls only.
+  if (decision !== null) query.set("decision", decision);
+  return request<CallPage>(`/runs/${id}/calls?${query}`);
+};
 
 /** One call in full: the state judged, the questions, the verdicts, the output. */
 export const getCall = (id: string, index: number): Promise<CallRecord> =>

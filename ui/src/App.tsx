@@ -28,11 +28,28 @@ export default function App() {
   const [selected, setSelected] = useState<string | null>(null);
   const { run, error: runError } = useRun(selected);
   const [tab, setTab] = useState<TabId>("fx");
+  // The audit tab narrowed to one decision's calls, reached from its drawer.
+  const [auditDecision, setAuditDecision] = useState<string | null>(null);
+
+  const select = (id: string | null) => {
+    setSelected(id);
+    setAuditDecision(null);
+  };
 
   const started = (view: RunView) => {
-    setSelected(view.id);
+    select(view.id);
     setTab(view.spec.domain === "battery" ? "battery" : "fx");
     refresh();
+  };
+
+  const changeTab = (id: TabId) => {
+    setTab(id);
+    setAuditDecision(null);
+  };
+
+  const showCalls = (decisionId: string) => {
+    setAuditDecision(decisionId);
+    setTab("audit");
   };
 
   return (
@@ -61,10 +78,10 @@ export default function App() {
             <RunList
               runs={runs}
               selected={selected}
-              onSelect={setSelected}
+              onSelect={select}
               onChanged={() => {
                 refresh();
-                setSelected(null);
+                select(null);
               }}
             />
           </div>
@@ -74,7 +91,16 @@ export default function App() {
           {infoError && <Banner kind="bad">{infoError}</Banner>}
           {!selected && <Welcome />}
           {runError && <Banner kind="bad">{runError}</Banner>}
-          {selected && run && <RunPanel run={run} tab={tab} onTab={setTab} />}
+          {selected && run && (
+            <RunPanel
+              run={run}
+              tab={tab}
+              onTab={changeTab}
+              auditDecision={auditDecision}
+              onShowCalls={showCalls}
+              onShowAllCalls={() => setAuditDecision(null)}
+            />
+          )}
         </main>
       </div>
     </div>
@@ -109,10 +135,16 @@ function RunPanel({
   run,
   tab,
   onTab,
+  auditDecision,
+  onShowCalls,
+  onShowAllCalls,
 }: {
   run: RunView;
   tab: TabId;
   onTab: (id: TabId) => void;
+  auditDecision: string | null;
+  onShowCalls: (decisionId: string) => void;
+  onShowAllCalls: () => void;
 }) {
   if (run.status === "running") {
     return (
@@ -181,8 +213,10 @@ function RunPanel({
 
       <Tabs tabs={tabs} active={active} onChange={onTab} />
 
-      {active === "fx" && fx && <FxPanel runId={run.id} result={fx} />}
-      {active === "battery" && battery && <BatteryPanel runId={run.id} result={battery} />}
+      {active === "fx" && fx && <FxPanel runId={run.id} result={fx} onShowCalls={onShowCalls} />}
+      {active === "battery" && battery && (
+        <BatteryPanel runId={run.id} result={battery} onShowCalls={onShowCalls} />
+      )}
       {active === "replays" && (
         <ReplayPanel fx={fx?.replay ?? null} battery={battery?.replay ?? null} />
       )}
@@ -192,7 +226,17 @@ function RunPanel({
         ) : (
           <Empty>this run produced no report.</Empty>
         ))}
-      {active === "audit" && <AuditPanel runId={run.id} calls={cost.calls} />}
+      {active === "audit" && (
+        // Keyed on the decision so the page offset starts over when the
+        // narrowing changes.
+        <AuditPanel
+          key={auditDecision ?? "*"}
+          runId={run.id}
+          calls={cost.calls}
+          decision={auditDecision}
+          onShowAll={onShowAllCalls}
+        />
+      )}
       {active === "catalogue" && <CataloguePanel />}
     </div>
   );

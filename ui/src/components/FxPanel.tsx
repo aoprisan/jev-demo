@@ -41,7 +41,16 @@ function BookRow({ label, book }: { label: string; book: FxBook }) {
   );
 }
 
-export function FxPanel({ runId, result }: { runId: string; result: FxResult }) {
+export function FxPanel({
+  runId,
+  result,
+  onShowCalls,
+}: {
+  runId: string;
+  result: FxResult;
+  /** Open the audit log narrowed to one decision's calls. */
+  onShowCalls?: (decisionId: string) => void;
+}) {
   const [open, setOpen] = useState<number | null>(null);
   const inverted = result.scorecard.filter((card) => card.inverted);
 
@@ -229,7 +238,12 @@ export function FxPanel({ runId, result }: { runId: string; result: FxResult }) 
       </Card>
 
       {open !== null && (
-        <FxDecisionDrawer runId={runId} index={open} onClose={() => setOpen(null)} />
+        <FxDecisionDrawer
+          runId={runId}
+          index={open}
+          onClose={() => setOpen(null)}
+          onShowCalls={onShowCalls}
+        />
       )}
     </div>
   );
@@ -240,10 +254,12 @@ function FxDecisionDrawer({
   runId,
   index,
   onClose,
+  onShowCalls,
 }: {
   runId: string;
   index: number;
   onClose: () => void;
+  onShowCalls?: (decisionId: string) => void;
 }) {
   const { data, error, loading } = useFetch(
     () => getFxDecision(runId, index),
@@ -286,6 +302,13 @@ function FxDecisionDrawer({
           <Card
             title="what judging it cost"
             note="every call tagged with this decision"
+            right={
+              onShowCalls && (
+                <button className="btn ghost" onClick={() => onShowCalls(data.row.decision_id)}>
+                  see the {num(data.row.calls)} calls →
+                </button>
+              )
+            }
           >
             <KeyValue
               rows={[

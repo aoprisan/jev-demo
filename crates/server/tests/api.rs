@@ -92,6 +92,21 @@ async fn health_and_info_describe_the_server() {
 }
 
 #[tokio::test]
+async fn api_answers_are_never_cacheable() {
+    // A poll for a run's progress must reach the process every time; a
+    // browser cache or a service worker replaying an old answer would freeze
+    // the page at "judging" while the run has long finished.
+    let state = state();
+    for uri in ["/api/health", "/api/runs", "/api/runs/absent"] {
+        let request = Request::builder().uri(uri).body(Body::empty()).expect("a valid request");
+        let response =
+            server::router(state.clone()).oneshot(request).await.expect("the router answers");
+        let cache = response.headers().get("cache-control").map(|v| v.to_str().unwrap_or(""));
+        assert_eq!(cache, Some("no-store"), "{uri} must carry Cache-Control: no-store");
+    }
+}
+
+#[tokio::test]
 async fn the_catalogue_is_served() {
     let state = state();
     let (status, prompts) = get(&state, "/api/prompts").await;
@@ -433,4 +448,21 @@ async fn every_decision_carries_the_calls_that_judged_it_and_what_they_cost() {
         calls.iter().any(|c| c["primitive"] == "explain" && c["decision"].is_null()),
         "a run-level call is left untagged"
     );
+
+    // And the log can be walked from the trade's side: asking for one decision's
+    // calls answers exactly those, still indexed into the whole log.
+    let (status, narrowed) =
+        get(&state, &format!("/api/runs/{id}/calls?decision=fx:0000&limit=1")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(narrowed["total"], 2, "total counts the decision's calls, not the run's");
+    let first = &narrowed["calls"].as_array().expect("a page")[0];
+    assert_eq!(first["decision"], "fx:0000");
+    assert_eq!(first["index"], tagged[0]["index"]);
+    let (_, rest) = get(&state, &format!("/api/runs/{id}/calls?decision=fx:0000&offset=1")).await;
+    let rest = rest["calls"].as_array().expect("the second page");
+    assert_eq!(rest.len(), 1);
+    assert_eq!(rest[0]["index"], tagged[1]["index"]);
+    let (_, none) = get(&state, &format!("/api/runs/{id}/calls?decision=fx:9999")).await;
+    assert_eq!(none["total"], 0);
+    assert_eq!(none["calls"].as_array().expect("an empty page").len(), 0);
 }

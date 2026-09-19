@@ -241,11 +241,16 @@ async fn decisions_jsonl(
         .into_response())
 }
 
-/// Where a page of the audit log starts and how long it is.
+/// Where a page of the audit log starts, how long it is, and — optionally —
+/// the one decision whose calls it is narrowed to.
 #[derive(Debug, Deserialize)]
 struct PageQuery {
     offset: Option<usize>,
     limit: Option<usize>,
+    /// A `decision_id` as the decision rows carry it, e.g. `fx:0011`. With it
+    /// set, `total` counts that decision's calls and the page walks only them;
+    /// `index` still points into the whole log.
+    decision: Option<String>,
 }
 
 async fn calls(
@@ -256,7 +261,12 @@ async fn calls(
     let handle = find(&state, &id)?;
     let records = handle.audit.records();
     let limit = page.limit.unwrap_or(DEFAULT_PAGE).clamp(1, MAX_PAGE);
-    Ok(Json(project::call_page(&records, page.offset.unwrap_or(0), limit)))
+    Ok(Json(project::call_page(
+        &records,
+        page.decision.as_deref(),
+        page.offset.unwrap_or(0),
+        limit,
+    )))
 }
 
 /// One call in full: the state that was judged, the questions, the verdicts and
