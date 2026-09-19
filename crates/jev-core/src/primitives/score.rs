@@ -5,9 +5,10 @@ use super::{
     at_most_chars, at_most_items, fit, in_range, need_noul, need_score, Evidence, JevInput, Weight,
 };
 use crate::ask::{Ask, Asks};
-use crate::client::Primitive;
+use crate::client::{JevReply, Primitive};
 use crate::error::{JevError, Result};
 use crate::jev::Jev;
+use crate::prompts;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -72,7 +73,7 @@ impl ScoreSpec {
     }
 }
 
-/// A 0..=100 score with the drivers that carried it.
+/// A 0..=100 score with independently affirmed conditions.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ScoreOut {
     /// The score, 0..=100.
@@ -86,6 +87,11 @@ pub struct ScoreOut {
 }
 
 impl ScoreOut {
+    /// The one-line rendering later stages see in `prior_judgments`.
+    pub fn line(&self) -> String {
+        self.reason.clone()
+    }
+
     /// Re-check every schema bound.
     pub fn validate(&self) -> Result<()> {
         in_range(P, "score", self.score as f64, 0.0, 100.0)?;
@@ -104,56 +110,70 @@ pub trait Score<I: JevInput> {
 #[async_trait::async_trait]
 impl<I: JevInput> Score<I> for Jev {
     async fn score(&self, input: &I, spec: &ScoreSpec) -> Result<ScoreOut> {
-        if spec.bands.len() < 2 {
-            return Err(JevError::InvalidCall("score rubric needs at least two bands".into()));
-        }
-        let mut asks =
-            Asks::new().with("level", Ask::score(spec.question.clone(), spec.bands.clone()));
-        for d in &spec.drivers {
-            asks = asks.with(
-                format!("driver_{}", d.name),
-                Ask::noul(d.claim.clone()).criteria(
-                    "This is true of the state as given.",
-                    "This is not true of the state as given.",
-                ),
-            );
-        }
-
-        let outcome = self.call(Primitive::Score, input, asks).await?;
-        let (fraction, confidence) = need_score(&outcome.reply, "level", P)?;
-        in_range(P, "level", fraction, 0.0, 1.0)?;
-        let score = (fraction * 100.0).round() as u8;
-
-        let mut weighted: Vec<Weight> = Vec::with_capacity(spec.drivers.len());
-        for d in &spec.drivers {
-            let p = need_noul(&outcome.reply, &format!("driver_{}", d.name), P)?;
-            in_range(P, "driver", p, 0.0, 1.0)?;
-            weighted.push(Weight { label: d.name.clone(), p: p as f32 });
-        }
-        weighted.sort_by(|a, b| b.p.total_cmp(&a.p));
-
-        let drivers: Vec<String> = weighted
-            .iter()
-            .filter(|w| w.p as f64 >= spec.driver_threshold)
-            .take(MAX_DRIVERS)
-            .map(|w| w.label.clone())
-            .collect();
-
-        let tail = if drivers.is_empty() {
-            "no driver held".to_owned()
-        } else {
-            format!("driven by {}", drivers.join(", "))
-        };
-        let reason = fit(&format!("{} scores {}/100 — {}", spec.subject, score, tail), MAX_REASON);
-
-        let out = ScoreOut {
-            score,
-            drivers,
-            reason,
-            evidence: Evidence { confidence: confidence as f32, distribution: weighted },
-        };
-        out.validate()?;
+        let outcome = self.call(Primitive::Score, input, asks(spec, "")?).await?;
+        let out = compose(spec, &outcome.reply, "")?;
         self.record(&outcome, &out)?;
         Ok(out)
     }
+}
+
+/// The level, plus one noul per candidate driver. All independent, one call.
+pub(crate) fn asks(spec: &ScoreSpec, prefix: &str) -> Result<Asks> {
+    if spec.bands.len() < 2 {
+        return Err(JevError::InvalidCall("score rubric needs at least two bands".into()));
+    }
+    let mut asks = Asks::new().with(
+        format!("{prefix}level"),
+        Ask::score(
+            prompts::instructions(Primitive::Score, "level", spec.question.clone(), []),
+            spec.bands.clone(),
+        ),
+    );
+    for d in &spec.drivers {
+        // A driver's claim is its own definition; generic yes/no criteria
+        // would add nothing the claim does not already say.
+        asks = asks.with(
+            format!("{prefix}driver_{}", d.name),
+            Ask::noul(prompts::instructions(Primitive::Score, "driver", d.claim.clone(), [])),
+        );
+    }
+    Ok(asks)
+}
+
+/// The score and the drivers that held, composed from the reply and validated.
+pub(crate) fn compose(spec: &ScoreSpec, reply: &JevReply, prefix: &str) -> Result<ScoreOut> {
+    let (fraction, confidence) = need_score(reply, &format!("{prefix}level"), P)?;
+    in_range(P, "level", fraction, 0.0, 1.0)?;
+    let score = (fraction * 100.0).round() as u8;
+
+    let mut weighted: Vec<Weight> = Vec::with_capacity(spec.drivers.len());
+    for d in &spec.drivers {
+        let p = need_noul(reply, &format!("{prefix}driver_{}", d.name), P)?;
+        in_range(P, "driver", p, 0.0, 1.0)?;
+        weighted.push(Weight { label: d.name.clone(), p: p as f32 });
+    }
+    weighted.sort_by(|a, b| b.p.total_cmp(&a.p));
+
+    let drivers: Vec<String> = weighted
+        .iter()
+        .filter(|w| w.p as f64 >= spec.driver_threshold)
+        .take(MAX_DRIVERS)
+        .map(|w| w.label.clone())
+        .collect();
+
+    let tail = if drivers.is_empty() {
+        "no condition affirmed".to_owned()
+    } else {
+        format!("observed conditions: {}", drivers.join(", "))
+    };
+    let reason = fit(&format!("{} scores {}/100 — {}", spec.subject, score, tail), MAX_REASON);
+
+    let out = ScoreOut {
+        score,
+        drivers,
+        reason,
+        evidence: Evidence { confidence: confidence as f32, distribution: weighted },
+    };
+    out.validate()?;
+    Ok(out)
 }

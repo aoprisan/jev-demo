@@ -104,14 +104,19 @@ fn gate_rows(session: &BatterySession) -> Vec<Vec<String>> {
 
 fn check_rows(session: &BatterySession) -> Vec<Vec<String>> {
     let total = session.days.len();
-    let mut rows = vec![vec!["check".into(), "failed".into(), "of".into()]];
+    let mut rows = vec![vec!["check".into(), "decided by".into(), "failed".into(), "of".into()]];
     for name in ["reserve_ok", "margin_plausible", "cycle_budget_ok"] {
         let failed = session
             .days
             .iter()
             .filter(|d| d.judgment.checks.get(name).is_some_and(|c| !c.ok))
             .count();
-        rows.push(vec![name.to_owned(), failed.to_string(), total.to_string()]);
+        rows.push(vec![
+            name.to_owned(),
+            crate::fx_report::check_source(session.days.iter().map(|d| &d.judgment.checks), name),
+            failed.to_string(),
+            total.to_string(),
+        ]);
     }
     rows
 }
@@ -174,6 +179,18 @@ fn terminal(
 
     s.push_str(&heading("Checks"));
     s.push_str(&table(&check_rows(session)));
+    s.push_str(&dim(
+        "  a rule is a comparison the battery crate makes itself; a jev check is a judgment
+",
+    ));
+
+    s.push_str(&heading("Review"));
+    s.push_str(&format!(
+        "  {} of {} days flagged for a second look on thin certainty (the gate stands)
+",
+        session.reviews(),
+        session.days.len()
+    ));
 
     s.push_str(&heading("Books"));
     s.push_str(&table(&book_rows(&session.solver_only, &session.gated)));

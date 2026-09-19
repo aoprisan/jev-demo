@@ -131,6 +131,7 @@ async fn a_forex_run_answers_with_the_shape_the_ui_reads() {
             "regime_accuracy",
             "interventions",
             "escalations",
+            "reviews",
             "failed_checks",
             "scorecard",
             "equity",
@@ -160,17 +161,40 @@ async fn a_decision_expands_without_leaking_the_generators_regime() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         keys(&detail),
-        ["row", "features", "headlines", "regime", "checks", "risk", "gate", "ungated", "gated"]
+        [
+            "row",
+            "features",
+            "headlines",
+            "regime",
+            "checks",
+            "risk",
+            "gate",
+            "review",
+            "ungated",
+            "gated"
+        ]
     );
 
     // The row carries the generator's regime for scoring the classifier; the
-    // features the judgment layer actually read must not.
+    // features the judgment layer actually read must not — nor the generator's
+    // label on each headline, which the old feature set counted.
     assert!(detail["row"]["true_regime"].is_string());
     let features = detail["features"].to_string();
     assert!(
         !features.contains("true_regime"),
         "the generator's regime must not reach the judged state: {features}"
     );
+    assert!(detail["features"].get("informative_headlines").is_none());
+    assert!(detail["features"]["stop_clears_noise"].is_boolean());
+
+    // Every check says who decided it; the stop is a rule, the regime a judgment.
+    let checks = detail["checks"].as_array().expect("checks");
+    assert_eq!(keys(&checks[0]), ["name", "ok", "note", "p", "source"]);
+    let source = |name: &str| {
+        checks.iter().find(|c| c["name"] == name).map(|c| c["source"].clone()).expect(name)
+    };
+    assert_eq!(source("stop_sane"), "rule");
+    assert_eq!(source("signal_valid_in_regime"), "jev");
 
     let (status, _) = get(&state, &format!("/api/runs/{id}/fx/decisions/99999")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -187,7 +211,9 @@ async fn a_battery_run_ranks_three_schedules_and_replays_a_notice() {
     assert_eq!(battery["days_judged"], 6);
 
     let replay = &battery["replay"];
-    assert!(replay["quiet"]["ranking"].as_array().expect("a ranking").len() == 3);
+    let ranking = replay["quiet"]["ranking"].as_array().expect("a ranking");
+    assert_eq!(ranking.len(), 3);
+    assert_eq!(keys(&ranking[0]), ["id", "rationale", "fit"]);
     assert!(replay["noticed"]["ranking"].as_array().expect("a ranking").len() == 3);
     assert!(replay["flipped"].is_boolean());
 
@@ -213,11 +239,18 @@ async fn the_audit_log_is_paged_and_downloadable() {
     assert_eq!(calls[0]["backend"], "mock");
 
     // One call in full: the state judged, the questions, the verdicts, the output.
+    // The first call of a forex decision is the batch of three independent stages.
     let (status, call) = get(&state, &format!("/api/runs/{id}/calls/0")).await;
     assert_eq!(status, StatusCode::OK);
     for field in ["state", "asks", "verdicts", "output", "primitive"] {
         assert!(call.get(field).is_some(), "the audit record carries {field}");
     }
+    assert_eq!(call["primitive"], "batch");
+    assert_eq!(call["stage"], "assess");
+    assert_eq!(keys(&call["state"]), ["context", "input", "prior_judgments"]);
+    assert!(call["asks"].get("regime.label").is_some());
+    assert!(call["asks"].get("risk.level").is_some());
+    assert!(call["asks"]["regime.label"]["instructions"]["not_for"].is_string());
 
     // The same log the CLI writes: one JSON object per line.
     let (status, jsonl) = text(&state, &format!("/api/runs/{id}/decisions.jsonl")).await;

@@ -94,7 +94,7 @@ export function BatteryReplayView({ replay }: { replay: BatteryReplay }) {
               [
                 "ranking",
                 <span key="r" className="mono">
-                  {pane.ranking.map((r, i) => `${i + 1}. ${words(r.id)} (${r.p.toFixed(2)})`).join("  ")}
+                  {pane.ranking.map((r, i) => `${i + 1}. ${words(r.id)} (fit ${r.fit.toFixed(2)})`).join("  ")}
                 </span>,
               ],
               ["risk", `${pane.risk_score}/100`],

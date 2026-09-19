@@ -1,10 +1,12 @@
 /**
- * The contract itself: each primitive's standing instructions, and the JSON
+ * The contract itself: each primitive's standing guidance, and the JSON
  * Schema of each output.
  *
- * The prompts are identical across both domains — domain framing is injected as
- * a context block, never as a separate prompt — and the schemas are what
- * `validate()` enforces in code. Both are served straight from the binary.
+ * The guidance is structured JSON — one object of named fields per question
+ * part, merged into every question's `instructions` — and identical across
+ * both domains; domain framing is a named field of the state, never an
+ * instruction. The schemas are what `validate()` enforces in code. Both are
+ * served straight from the binary.
  */
 
 import { useState } from "react";
@@ -20,7 +22,7 @@ export function CataloguePanel() {
     <div className="stack">
       <Tabs
         tabs={[
-          { id: "prompts", label: "standing instructions" },
+          { id: "prompts", label: "standing guidance" },
           { id: "schemas", label: "output schemas" },
         ]}
         active={view}
@@ -40,7 +42,11 @@ function Prompts() {
   return (
     <div className="stack">
       {data.map((prompt) => (
-        <Card key={prompt.primitive} title={prompt.primitive} note="identical across domains">
+        <Card
+          key={prompt.primitive}
+          title={prompt.primitive}
+          note="merged into each question's instructions; identical across domains"
+        >
           <div className="scroll-box">
             <pre>{prompt.text}</pre>
           </div>

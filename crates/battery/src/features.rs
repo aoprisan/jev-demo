@@ -15,6 +15,10 @@ use synth::{AfrrWindow, BatterySpec, BatteryWorld, GridNote};
 
 /// Days of history used for the percentile and sigma comparisons.
 const LOOKBACK_DAYS: u32 = 10;
+/// A schedule using at least this fraction of the daily cycle budget has
+/// nearly spent it. The `cycle_budget_ok` check is this comparison, made here
+/// in code; Jev reads the outcome as `cycles_within_budget`.
+pub const CYCLE_BUDGET_NEAR: f64 = 0.85;
 
 /// The observable state of one battery day.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -50,8 +54,14 @@ pub struct BatteryFeatures {
     /// Whether the schedule under consideration falls below the reserve state
     /// of charge at any point inside the window.
     pub schedule_dips_below_reserve_soc: bool,
+    /// Whether that dip breaches a live obligation: the window is active and
+    /// the schedule dips inside it. The `reserve_ok` rule, made here.
+    pub reserve_breached: bool,
     /// The cycles that schedule uses, as a fraction of the daily budget.
     pub cycle_budget_used_fraction: f64,
+    /// Whether that fraction stays under [`CYCLE_BUDGET_NEAR`]. The
+    /// `cycle_budget_ok` rule, made here.
+    pub cycles_within_budget: bool,
     /// Which schedule the schedule-level fields above describe.
     pub under_consideration: String,
 }
@@ -107,6 +117,8 @@ impl BatteryFeatures {
             + 0.3 * if grid_notice_overlaps_discharge { 1.0 } else { 0.0 })
         .clamp(0.0, 1.0);
 
+        let cycle_budget_used_fraction = schedule.cycles / asset.daily_cycle_budget;
+
         BatteryFeatures {
             day,
             date: world.start.plus_days(day as i64).to_string(),
@@ -121,7 +133,9 @@ impl BatteryFeatures {
             grid_notice_overlaps_discharge,
             id_deviation_sigmas,
             schedule_dips_below_reserve_soc: dips,
-            cycle_budget_used_fraction: schedule.cycles / asset.daily_cycle_budget,
+            reserve_breached: afrr.is_some() && dips,
+            cycle_budget_used_fraction,
+            cycles_within_budget: cycle_budget_used_fraction < CYCLE_BUDGET_NEAR,
             under_consideration: schedule.kind.as_str().to_owned(),
         }
     }

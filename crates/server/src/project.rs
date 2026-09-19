@@ -33,7 +33,16 @@ fn classify_view<E: Serialize>(out: &ClassifyOut<E>) -> ClassifyView {
 fn check_views(out: &CheckOut) -> Vec<CheckView> {
     out.checks
         .iter()
-        .map(|c| CheckView { name: c.name.clone(), ok: c.ok, note: c.note.clone(), p: c.p })
+        .map(|c| CheckView {
+            name: c.name.clone(),
+            ok: c.ok,
+            note: c.note.clone(),
+            p: c.p,
+            source: match c.source {
+                jev_core::CheckSource::Jev => "jev".to_owned(),
+                jev_core::CheckSource::Rule => "rule".to_owned(),
+            },
+        })
         .collect()
 }
 
@@ -60,7 +69,7 @@ fn gate_view(out: &GateOut) -> GateView {
 fn ranked_views<T: Serialize>(out: &RankOut<T>) -> Vec<RankedView> {
     out.ordered
         .iter()
-        .map(|r| RankedView { id: label_of(&r.id), rationale: r.rationale.clone(), p: r.p })
+        .map(|r| RankedView { id: label_of(&r.id), rationale: r.rationale.clone(), fit: r.fit })
         .collect()
 }
 
@@ -206,6 +215,7 @@ pub fn fx_result(run: &FxRun) -> FxResult {
         regime_accuracy: session.regime_accuracy(),
         interventions: session.interventions(),
         escalations: session.escalations(),
+        reviews: session.reviews(),
         failed_checks: session.decisions.iter().map(|d| d.judgment.checks.failed().len()).sum(),
         scorecard,
         equity,
@@ -231,6 +241,7 @@ pub fn fx_detail(run: &FxRun, index: usize) -> Option<FxDecisionDetail> {
         checks: check_views(&j.checks),
         risk: score_view(&j.risk),
         gate: gate_view(&j.gate),
+        review: j.review.clone(),
         ungated: record.ungated.as_ref().map(fill_view),
         gated: record.gated.as_ref().map(fill_view),
     })
@@ -359,6 +370,7 @@ pub fn battery_result(run: &BatteryRun) -> BatteryResult {
             .collect(),
         interventions: session.interventions(),
         escalations: session.escalations(),
+        reviews: session.reviews(),
         failed_checks: session.days.iter().map(|d| d.judgment.checks.failed().len()).sum(),
         margin_curve,
         days: session.days.iter().map(battery_row).collect(),
@@ -382,6 +394,7 @@ fn day_detail(record: &battery::DayRecord) -> BatteryDayDetail {
         checks: check_views(&j.checks),
         risk: score_view(&j.risk),
         gate: gate_view(&j.gate),
+        review: j.review.clone(),
         solver_only: execution_view(&record.solver_only),
         gated: execution_view(&record.gated),
     }

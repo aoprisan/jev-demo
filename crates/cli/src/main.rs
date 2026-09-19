@@ -53,7 +53,7 @@ enum Command {
     Battery,
     /// Both, then one Explain call summarising the day for Compliance.
     All,
-    /// Print each primitive's standing instructions.
+    /// Print each primitive's standing guidance, as the JSON merged into its questions.
     Prompts,
     /// Print the JSON Schema of each primitive output.
     Schemas,

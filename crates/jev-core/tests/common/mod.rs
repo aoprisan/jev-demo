@@ -86,7 +86,8 @@ pub fn choice(label: &str, others: &[&str]) -> Verdict {
 
 /// A score verdict landing exactly on `fraction` of the rubric.
 pub fn score_at(fraction: f64, levels: usize) -> Verdict {
-    let mut probabilities = std::collections::BTreeMap::new();
+    let mut probabilities: std::collections::BTreeMap<u32, f64> =
+        (0..levels as u32).map(|i| (i, 0.0)).collect();
     let exact = fraction * (levels - 1) as f64;
     let lower = exact.floor() as u32;
     let upper = (lower + 1).min(levels as u32 - 1);

@@ -1,0 +1,7 @@
+{
+  "fit": {
+    "what": "How well one solver-produced candidate suits the conditions in `state.input`, on the levels offered. Every candidate is complete and valid; none is wrong.",
+    "not_for": "Modifying a candidate, blending two of them, or proposing a better one. The numbers inside each candidate are the solver's.",
+    "evidence": "The candidate named here, judged against the conditions on its own terms. Each candidate is rated by its own question; the caller orders the answers."
+  }
+}

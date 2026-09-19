@@ -22,6 +22,9 @@ pub enum Primitive {
     Rank,
     /// [`crate::Explain`].
     Explain,
+    /// Several primitives' questions fanned out in one call, through
+    /// [`crate::pipeline::Batch`]. The record's output lists each one.
+    Batch,
 }
 
 impl Primitive {
@@ -34,6 +37,7 @@ impl Primitive {
             Primitive::Check => "check",
             Primitive::Rank => "rank",
             Primitive::Explain => "explain",
+            Primitive::Batch => "batch",
         }
     }
 }
@@ -44,21 +48,27 @@ impl std::fmt::Display for Primitive {
     }
 }
 
-/// One outbound call: the primitive's standing instructions, the domain framing
-/// block, the state and the questions.
+/// One outbound call: the state and the questions, and nothing else.
+///
+/// Everything instruction-like travels inside each question's `instructions`
+/// (see [`crate::prompts`]); the state carries only content — the domain
+/// framing under `context`, the domain input under `input`, and earlier
+/// stages' typed outputs under `prior_judgments`.
 #[derive(Debug, Clone, Serialize)]
 pub struct JevCall {
     /// Which primitive is asking.
     pub primitive: Primitive,
-    /// The primitive's standing instructions, from `prompts/<primitive>.md`.
-    pub instructions: String,
-    /// Domain-specific framing, injected as a context block rather than a separate prompt.
-    pub context: String,
-    /// The state Jev judges. Always an object; a pipeline stage nests the domain
-    /// input under `input` and prior judgments under `prior_judgments`.
+    /// The state Jev judges: `{"context": …, "input": …, "prior_judgments": […]}`.
     pub state: serde_json::Value,
     /// The questions, in offer order.
     pub asks: Asks,
+}
+
+impl JevCall {
+    /// The domain framing in the state, if any.
+    pub fn context(&self) -> &str {
+        self.state.get("context").and_then(serde_json::Value::as_str).unwrap_or("")
+    }
 }
 
 /// One inbound reply.

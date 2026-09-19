@@ -31,6 +31,8 @@ async fn the_readmes_battery_table_is_what_the_run_produces() {
     close(session.solver_only.reserve_payment, 87.0, 1.0, "solver-only reserve payment");
     close(session.gated.reserve_payment, 812.0, 1.0, "gated reserve payment");
 
+    assert_eq!(session.reviews(), 33, "days flagged for review");
+
     assert_eq!(session.solver_only.reserve_breaches, 77, "solver-only breach hours");
     assert_eq!(session.solver_only.days_with_breach, 30, "solver-only breach days");
     assert_eq!(session.gated.reserve_breaches, 0, "the gated desk breaches nothing");
@@ -63,6 +65,7 @@ async fn the_readmes_forex_scorecard_is_what_the_run_produces() {
         fx::run_session(&jev(), &world, &fx::StrategyParams::default(), None).await.unwrap();
 
     assert_eq!(session.decisions.len(), 214, "candidates");
+    assert_eq!(session.reviews(), 16, "decisions flagged for review");
     close(session.ungated.return_bps(), 16.65, 0.01, "ungated return on notional");
     close(session.gated.return_bps(), 9.70, 0.01, "gated return on notional");
 

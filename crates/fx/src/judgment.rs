@@ -1,11 +1,16 @@
-//! The fx judgment pipeline:
-//! `Classify(regime) -> Check(sanity) -> Score(event risk) -> Gate`.
+//! The fx judgment pipeline, in two calls:
+//! `[Classify(regime), Check(sanity), Score(event risk)] -> Gate`.
+//!
+//! The first three judgments are independent of one another and read the same
+//! state, so they are fanned out in one call; the gate reads all three as
+//! priors and goes second. After the gate, a code-side [`ReviewPolicy`] flags
+//! the decision for a second look when the certainty behind it was thin.
 
 use crate::features::FxFeatures;
 use crate::strategy::TradeCandidate;
 use jev_core::{
     CheckOut, CheckSpec, ClassifyOut, ClassifySpec, GateOut, GateSpec, JevInput, Label, Pipeline,
-    Result, ScoreOut, ScoreSpec,
+    Result, ReviewPolicy, ScoreOut, ScoreSpec,
 };
 use serde::{Deserialize, Serialize};
 
@@ -77,7 +82,8 @@ pub struct FxDecisionInput {
     pub features: FxFeatures,
     /// The solver's proposal. Jev may judge it; it may not change it.
     pub candidate: CandidateView,
-    /// Today's headlines, mostly noise.
+    /// Today's headlines, as printed. Most are noise; on a release day one is
+    /// not, and the model is the one to tell which.
     pub headlines: Vec<String>,
 }
 
@@ -121,42 +127,24 @@ fn round(v: f64, places: u32) -> f64 {
 }
 
 impl JevInput for FxDecisionInput {
+    /// Only what the fields do not already say: which solver made the
+    /// proposal, and that its numbers are final. Every figure the old framing
+    /// restated is a field of `features` or `candidate`.
     fn context_block(&self) -> String {
-        let f = &self.features;
-        let event = match &f.next_event_kind {
-            Some(kind) if f.hours_to_event < 48.0 => {
-                format!("{kind} in {:.1}h", f.hours_to_event)
-            }
-            _ => "no release scheduled nearby".to_owned(),
-        };
         format!(
-            "Domain: spot forex, 4-hour bars. A deterministic Bollinger mean-reversion solver \
-             has proposed a {} in {} at {:.5}, stopping at {:.5} and targeting {:.5} — a stop \
-             {:.2} ATRs away for {:.2}:1 reward-to-risk on {:.0}k units.\n\
-             Conditions: {event}. Directional persistence {:.2} of 1. Volatility at the {:.0}th \
-             percentile of its recent history. The trade would take {} from {:.0}% to {:.0}% of \
-             the book.\n\
-             The solver owns those numbers. You are judging whether, and how much of, this \
-             should be acted on.",
-            f.side,
-            f.pair,
-            self.candidate.price,
-            self.candidate.stop,
-            self.candidate.target,
-            f.stop_atr_multiple,
-            f.reward_risk,
-            self.candidate.size_units,
-            f.trend_strength,
-            f.volatility_percentile * 100.0,
-            f.exposure_currency(),
-            f.pre_trade_exposure_share * 100.0,
-            f.post_trade_exposure_share * 100.0,
+            "Spot forex, 4-hour bars. `candidate` is a {} in {} proposed by a deterministic \
+             Bollinger mean-reversion solver; its price, stop, target and size are final. \
+             `features` is the observable state around it, measured from the same bars, the \
+             calendar and the book; exposure fields refer to the {} leg the trade adds to.",
+            self.features.side,
+            self.features.pair,
+            self.features.exposure_currency(),
         )
     }
 }
 
 impl FxFeatures {
-    /// The leg of the pair this trade adds to, for the context block.
+    /// The leg of the pair this trade adds to, for the framing.
     fn exposure_currency(&self) -> &str {
         // The pair's leg the trade adds to, derived from the rendered side.
         if self.side == "long" {
@@ -178,7 +166,14 @@ pub struct FxJudgment {
     pub risk: ScoreOut,
     /// The gate.
     pub gate: GateOut,
+    /// Why a person should look at this decision, when the certainty behind
+    /// it was thin. Set by [`REVIEW`] in code; it never changes the gate.
+    pub review: Option<String>,
 }
+
+/// When a forex decision is flagged for review.
+pub const REVIEW: ReviewPolicy =
+    ReviewPolicy { min_classify_confidence: 0.10, undecided_check_band: (0.4, 0.6) };
 
 /// The classify stage.
 pub fn regime_spec() -> ClassifySpec {
@@ -190,13 +185,20 @@ pub fn regime_spec() -> ClassifySpec {
 }
 
 /// The three sanity checks, exactly as the brief names them.
-pub fn sanity_spec() -> CheckSpec {
+///
+/// `stop_sane` is a comparison of the stop's distance with the window's ATR:
+/// a rule the fx crate makes itself ([`crate::features::STOP_CLEARS_NOISE_ATR`])
+/// and reports here in the same shape as the two Jev judges. The other two are
+/// judgments — whether a mean-reversion signal belongs in this regime, and
+/// whether the book can take the exposure — and go to Jev.
+pub fn sanity_spec(features: &FxFeatures) -> CheckSpec {
     CheckSpec::new("the proposed trade")
-        .item(
+        .rule(
             "stop_sane",
             "The stop is far enough from entry to survive ordinary noise in this market.",
-            "the stop sits beyond the window's normal swing, at or above roughly 1.2 ATRs",
+            "the stop sits beyond the window's normal swing",
             "the stop is inside the range this market moves in a single bar",
+            features.stop_clears_noise,
         )
         .item(
             "signal_valid_in_regime",
@@ -241,15 +243,23 @@ pub fn gate_spec(candidate: &TradeCandidate) -> GateSpec {
     )
 }
 
-/// Run the full fx pipeline over one candidate.
+/// Run the full fx pipeline over one candidate: one call for the three
+/// independent judgments, one for the gate that weighs them.
 pub async fn judge(
     pipeline: &mut Pipeline,
     input: &FxDecisionInput,
     candidate: &TradeCandidate,
 ) -> Result<FxJudgment> {
-    let regime: ClassifyOut<FxRegime> = pipeline.classify("regime", input, &regime_spec()).await?;
-    let checks = pipeline.check("sanity", input, &sanity_spec()).await?;
-    let risk = pipeline.score("risk", input, &risk_spec()).await?;
+    let mut assess = pipeline.batch("assess", input);
+    let regime = assess.classify::<FxRegime>("regime", &regime_spec())?;
+    let checks = assess.check("sanity", &sanity_spec(&input.features))?;
+    let risk = assess.score("risk", &risk_spec())?;
+    let mut assessed = assess.send().await?;
+    let regime: ClassifyOut<FxRegime> = assessed.take(regime)?;
+    let checks = assessed.take(checks)?;
+    let risk = assessed.take(risk)?;
+
     let gate = pipeline.gate("gate", input, &gate_spec(candidate)).await?;
-    Ok(FxJudgment { regime, checks, risk, gate })
+    let review = REVIEW.review(regime.confidence, &checks);
+    Ok(FxJudgment { regime, checks, risk, gate, review })
 }

@@ -2,9 +2,10 @@
 
 use super::{at_most_chars, evidence_from, fit, in_range, need_choice, Evidence, JevInput};
 use crate::ask::{Ask, Asks};
-use crate::client::Primitive;
+use crate::client::{JevReply, Primitive};
 use crate::error::{JevError, Result};
 use crate::jev::Jev;
+use crate::prompts;
 use schemars::JsonSchema;
 use serde::Serialize;
 
@@ -60,6 +61,11 @@ pub struct ClassifyOut<E> {
 }
 
 impl<E> ClassifyOut<E> {
+    /// The one-line rendering later stages see in `prior_judgments`.
+    pub fn line(&self) -> String {
+        self.reason.clone()
+    }
+
     /// Re-check every schema bound.
     pub fn validate(&self) -> Result<()> {
         in_range(P, "confidence", self.confidence as f64, 0.0, 1.0)?;
@@ -77,48 +83,59 @@ pub trait Classify<I: JevInput, E: Label> {
 #[async_trait::async_trait]
 impl<I: JevInput, E: Label + Serialize> Classify<I, E> for Jev {
     async fn classify(&self, input: &I, spec: &ClassifySpec) -> Result<ClassifyOut<E>> {
-        if E::labels().len() < 2 {
-            return Err(JevError::InvalidCall(
-                "classify needs at least two labels to choose between".into(),
-            ));
-        }
-        let asks = Asks::new().with(
-            "label",
-            Ask::choice(
-                spec.question.clone(),
-                E::labels().iter().map(|l| (l.name(), l.describe())),
-            ),
-        );
-
-        let outcome = self.call(Primitive::Classify, input, asks).await?;
-        let (name, probabilities, confidence) = need_choice(&outcome.reply, "label", P)?;
-        let label = E::from_name(name).ok_or_else(|| JevError::UnknownLabel {
-            primitive: P,
-            label: name.to_owned(),
-            allowed: E::labels().iter().map(|l| l.name()).collect::<Vec<_>>().join(", "),
-        })?;
-        in_range(P, "confidence", confidence, 0.0, 1.0)?;
-        let evidence = evidence_from(probabilities, confidence);
-
-        // Report the label's own probability alongside the confidence: the two
-        // are different quantities, and printing only the confidence next to a
-        // runner-up's probability invites reading them as comparable.
-        let top = evidence.distribution.first().map(|w| w.p).unwrap_or(0.0);
-        let runner = evidence
-            .runner_up()
-            .map(|w| format!("; next {} {:.2}", w.label, w.p))
-            .unwrap_or_default();
-        let reason = fit(
-            &format!(
-                "{} reads as {} (p={:.2}, conf {:.2}{})",
-                spec.subject, name, top, confidence, runner
-            ),
-            MAX_REASON,
-        );
-
-        let out = ClassifyOut { label, confidence: confidence as f32, reason, evidence };
-        out.validate()?;
+        let outcome = self.call(Primitive::Classify, input, asks::<E>(spec, "")?).await?;
+        let out = compose::<E>(spec, &outcome.reply, "")?;
         self.record(&outcome, &out)?;
         Ok(out)
     }
+}
+
+/// The one question: which label.
+pub(crate) fn asks<E: Label>(spec: &ClassifySpec, prefix: &str) -> Result<Asks> {
+    if E::labels().len() < 2 {
+        return Err(JevError::InvalidCall(
+            "classify needs at least two labels to choose between".into(),
+        ));
+    }
+    Ok(Asks::new().with(
+        format!("{prefix}label"),
+        Ask::choice(
+            prompts::instructions(Primitive::Classify, "label", spec.question.clone(), []),
+            E::labels().iter().map(|l| (l.name(), l.describe())),
+        ),
+    ))
+}
+
+/// The label, composed from the reply and validated.
+pub(crate) fn compose<E: Label>(
+    spec: &ClassifySpec,
+    reply: &JevReply,
+    prefix: &str,
+) -> Result<ClassifyOut<E>> {
+    let (name, probabilities, confidence) = need_choice(reply, &format!("{prefix}label"), P)?;
+    let label = E::from_name(name).ok_or_else(|| JevError::UnknownLabel {
+        primitive: P,
+        label: name.to_owned(),
+        allowed: E::labels().iter().map(|l| l.name()).collect::<Vec<_>>().join(", "),
+    })?;
+    in_range(P, "confidence", confidence, 0.0, 1.0)?;
+    let evidence = evidence_from(probabilities, confidence);
+
+    // Report the label's own probability alongside the confidence: the two
+    // are different quantities, and printing only the confidence next to a
+    // runner-up's probability invites reading them as comparable.
+    let top = evidence.distribution.first().map(|w| w.p).unwrap_or(0.0);
+    let runner =
+        evidence.runner_up().map(|w| format!("; next {} {:.2}", w.label, w.p)).unwrap_or_default();
+    let reason = fit(
+        &format!(
+            "{} reads as {} (p={:.2}, conf {:.2}{})",
+            spec.subject, name, top, confidence, runner
+        ),
+        MAX_REASON,
+    );
+
+    let out = ClassifyOut { label, confidence: confidence as f32, reason, evidence };
+    out.validate()?;
+    Ok(out)
 }

@@ -55,6 +55,7 @@ export function FxPanel({ runId, result }: { runId: string; result: FxResult }) 
           sub={`${pct(result.interventions / Math.max(1, result.decisions_judged))} of decisions`}
         />
         <Stat label="escalations" value={num(result.escalations)} sub="sent to a human" />
+        <Stat label="flagged for review" value={num(result.reviews)} sub="thin certainty; gate stands" />
         <Stat label="failed checks" value={num(result.failed_checks)} />
         <Stat
           label="regime accuracy"
@@ -276,6 +277,11 @@ function FxDecisionDrawer({
 
           <ScoreCard view={data.risk} title="stage 3 — event risk" />
           <GateCard view={data.gate} title="stage 4 — the gate" />
+          {data.review && (
+            <Card title="flagged for review" note="code-side policy">
+              <p className="reason">{data.review}</p>
+            </Card>
+          )}
 
           <Card
             title="what the judgment layer read"
@@ -285,17 +291,17 @@ function FxDecisionDrawer({
               rows={[
                 [
                   "next release",
-                  data.features.next_event_kind
+                  data.features.next_event_kind && data.features.hours_to_event !== null
                     ? `${data.features.next_event_kind} in ${num(data.features.hours_to_event, 1)}h`
                     : "none scheduled",
                 ],
                 ["stop / atr", num(data.features.stop_atr_multiple, 2)],
+                ["stop clears noise", data.features.stop_clears_noise ? "yes" : "no"],
                 ["reward : risk", num(data.features.reward_risk, 2)],
                 ["trend strength", num(data.features.trend_strength, 2)],
                 ["volatility pct", pct(data.features.volatility_percentile)],
                 ["band excursion", num(data.features.band_excursion, 2)],
                 ["exposure multiple", num(data.features.exposure_multiple, 2)],
-                ["informative headlines", num(data.features.informative_headlines)],
                 ["stress", num(data.features.stress_indicator, 2)],
               ]}
             />

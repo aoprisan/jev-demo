@@ -4,9 +4,9 @@ mod common;
 
 use common::{choice, noul, score_at, Recorder, TestInput};
 use jev_core::{
-    Action, Audience, Check, CheckOut, CheckResult, CheckSpec, Classify, ClassifySpec, Evidence,
-    Explain, ExplainSpec, Gate, GateOut, GateSpec, Jev, JevError, Label, Rank, RankSpec, Score,
-    ScoreOut, ScoreSpec, Verdict,
+    Action, Audience, Check, CheckOut, CheckResult, CheckSource, CheckSpec, Classify, ClassifySpec,
+    Evidence, Explain, ExplainSpec, Gate, GateOut, GateSpec, Jev, JevError, Label, Rank, RankSpec,
+    Score, ScoreOut, ScoreSpec, Verdict,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -41,6 +41,37 @@ where
     F: Fn(&str, &jev_core::Asks) -> Verdict + Send + Sync + 'static,
 {
     Jev::new(Arc::new(Recorder::new(answer)))
+}
+
+/// A backend that may leave a question unanswered.
+struct Partial<F>(F);
+
+#[async_trait::async_trait]
+impl<F: Fn(&str) -> Option<Verdict> + Send + Sync> jev_core::JevClient for Partial<F> {
+    fn backend(&self) -> &'static str {
+        "partial"
+    }
+    async fn ask(&self, call: &jev_core::JevCall) -> jev_core::Result<jev_core::JevReply> {
+        let mut verdicts = indexmap::IndexMap::new();
+        for (name, _) in call.asks.iter() {
+            if let Some(v) = (self.0)(name) {
+                verdicts.insert(name.to_owned(), v);
+            }
+        }
+        Ok(jev_core::JevReply {
+            verdicts,
+            model: "partial".into(),
+            usage: jev_core::Usage::default(),
+            latency: std::time::Duration::ZERO,
+        })
+    }
+}
+
+fn jev_answering_partially<F>(answer: F) -> Jev
+where
+    F: Fn(&str) -> Option<Verdict> + Send + Sync + 'static,
+{
+    Jev::new(Arc::new(Partial(answer)))
 }
 
 fn input() -> TestInput {
@@ -100,7 +131,7 @@ async fn gate_rejects_a_missing_answer() {
     // A backend that answers only the action, never the size.
     let jev = Jev::new(Arc::new(Recorder::new(|name, _| {
         if name == "action" {
-            choice("execute", &["reduce"])
+            choice("execute", &["reduce", "hold", "escalate"])
         } else {
             score_at(1.0, 5)
         }
@@ -116,7 +147,8 @@ async fn gate_rejects_a_missing_answer() {
         }
         async fn ask(&self, _call: &jev_core::JevCall) -> jev_core::Result<jev_core::JevReply> {
             let mut verdicts = indexmap::IndexMap::new();
-            verdicts.insert("action".to_owned(), choice("execute", &["reduce"]));
+            verdicts
+                .insert("action".to_owned(), choice("execute", &["reduce", "hold", "escalate"]));
             Ok(jev_core::JevReply {
                 verdicts,
                 model: "partial".into(),
@@ -299,22 +331,94 @@ async fn check_is_exactly_at_the_threshold_inclusive() {
 #[test]
 fn check_schema_rejects_an_out_of_range_probability() {
     let bad = CheckOut {
-        checks: vec![CheckResult { name: "x".into(), ok: true, note: "n".into(), p: 1.5 }],
+        checks: vec![CheckResult {
+            name: "x".into(),
+            ok: true,
+            note: "n".into(),
+            p: 1.5,
+            source: CheckSource::Jev,
+        }],
     };
     assert!(matches!(bad.validate(), Err(JevError::OutOfRange { field: "p", .. })));
+}
+
+#[tokio::test]
+async fn a_rule_check_is_decided_in_code_and_never_asked() {
+    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = asked.clone();
+    let jev = jev_answering(move |name, _| {
+        seen.lock().unwrap().push(name.to_owned());
+        noul(0.9)
+    });
+    let spec = CheckSpec::new("trade")
+        .rule("stop_sane", "The stop clears noise.", "clears it", "inside one bar", false)
+        .item("signal_valid", "The signal is valid here.", "valid", "not valid");
+    let out = Check::check(&jev, &input(), &spec).await.unwrap();
+
+    assert_eq!(asked.lock().unwrap().as_slice(), ["signal_valid"]);
+    let stop = out.get("stop_sane").unwrap();
+    assert_eq!((stop.ok, stop.p, stop.source), (false, 0.0, CheckSource::Rule));
+    assert!(stop.note.starts_with("rule fails: inside one bar"), "{}", stop.note);
+    let signal = out.get("signal_valid").unwrap();
+    assert_eq!((signal.ok, signal.source), (true, CheckSource::Jev));
+    // Report order is spec order, whoever decided.
+    assert_eq!(out.failed(), vec!["stop_sane"]);
+    assert_eq!(
+        out.checks.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+        ["stop_sane", "signal_valid"]
+    );
+}
+
+#[tokio::test]
+async fn a_check_of_only_rules_is_refused_as_not_a_judgment() {
+    let jev = jev_answering(|_, _| noul(0.9));
+    let spec = CheckSpec::new("t").rule("a", "c", "ok", "not ok", true);
+    let err = Check::check(&jev, &input(), &spec).await.unwrap_err();
+    assert!(matches!(err, JevError::InvalidCall(_)), "{err:?}");
+}
+
+#[test]
+fn check_schema_rejects_a_rule_with_a_fractional_probability() {
+    let bad = CheckOut {
+        checks: vec![CheckResult {
+            name: "x".into(),
+            ok: true,
+            note: "n".into(),
+            p: 0.7,
+            source: CheckSource::Rule,
+        }],
+    };
+    assert!(matches!(bad.validate(), Err(JevError::Contradiction { .. })));
+}
+
+#[tokio::test]
+async fn undecided_checks_are_the_judged_ones_near_the_threshold() {
+    let jev = jev_answering(|name, _| match name {
+        "a" => noul(0.55),
+        "b" => noul(0.95),
+        _ => noul(0.1),
+    });
+    let spec = CheckSpec::new("t")
+        .item("a", "c", "ok", "not ok")
+        .item("b", "c", "ok", "not ok")
+        .item("c", "c", "ok", "not ok")
+        .rule("d", "c", "ok", "not ok", true);
+    let out = Check::check(&jev, &input(), &spec).await.unwrap();
+    let names: Vec<&str> = out.undecided(0.4, 0.6).iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, vec!["a"]);
 }
 
 // ---- rank ----------------------------------------------------------------------------------
 
 #[tokio::test]
-async fn rank_reads_the_ordering_off_the_distribution() {
-    let jev = jev_answering(|_, _| {
-        let mut p = indexmap::IndexMap::new();
-        // Offer order is aggressive, balanced, reserve_heavy; the ordering is not.
-        p.insert("aggressive".to_owned(), 0.15);
-        p.insert("balanced".to_owned(), 0.25);
-        p.insert("reserve_heavy".to_owned(), 0.60);
-        Verdict::Choice { label: "reserve_heavy".into(), probabilities: p, confidence: 0.6 }
+async fn rank_reads_the_ordering_off_per_candidate_fit_scores() {
+    // Offer order is aggressive, balanced, reserve_heavy; the ordering is not.
+    // Each candidate gets its own Score on the same four-level rubric.
+    let jev = jev_answering(|name, _| match name {
+        "fit_aggressive" => score_at(0.25, 4),
+        "fit_balanced" => score_at(0.5, 4),
+        "fit_reserve_heavy" => score_at(0.85, 4),
+        other => panic!("unexpected ask {other}"),
     });
     let spec = RankSpec::new(
         "schedules",
@@ -332,11 +436,50 @@ async fn rank_reads_the_ordering_off_the_distribution() {
     assert_eq!(out.top().unwrap().id, "reserve_heavy");
     assert!((out.margin() - 0.35).abs() < 1e-6, "margin {}", out.margin());
     assert!(out.ordered[0].rationale.starts_with("1st of 3"), "{}", out.ordered[0].rationale);
+    assert!((out.ordered[1].fit - 0.5).abs() < 1e-6);
+}
+
+#[tokio::test]
+async fn rank_asks_one_fit_question_per_candidate_naming_it() {
+    let recorder = std::sync::Arc::new(common::Recorder::new(|_, _| score_at(0.5, 4)));
+    let jev = Jev::new(recorder.clone());
+    let spec = RankSpec::new(
+        "s",
+        "q?",
+        vec![
+            jev_core::Candidate::new("a".to_string(), "does x"),
+            jev_core::Candidate::new("b".to_string(), "does y"),
+        ],
+    );
+    Rank::<_, String>::rank(&jev, &input(), &spec).await.unwrap();
+    let calls = recorder.calls.lock().unwrap();
+    let names: Vec<&str> = calls[0].asks.iter().map(|(n, _)| n).collect();
+    assert_eq!(names, vec!["fit_a", "fit_b"]);
+    let ask = calls[0].asks.get("fit_b").unwrap();
+    assert_eq!(ask.instructions()["candidate"]["summary"], serde_json::json!("does y"));
+    assert!(matches!(ask, jev_core::Ask::Score { levels, .. } if levels.len() == 4));
+}
+
+#[tokio::test]
+async fn rank_keeps_offer_order_between_equal_fits() {
+    let jev = jev_answering(|_, _| score_at(0.5, 4));
+    let spec = RankSpec::new(
+        "s",
+        "q?",
+        vec![
+            jev_core::Candidate::new("b".to_string(), "y"),
+            jev_core::Candidate::new("a".to_string(), "x"),
+        ],
+    );
+    let out = Rank::<_, String>::rank(&jev, &input(), &spec).await.unwrap();
+    let order: Vec<&str> = out.ordered.iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(order, vec!["b", "a"]);
+    assert_eq!(out.margin(), 0.0);
 }
 
 #[tokio::test]
 async fn rank_rejects_a_reply_that_drops_a_candidate() {
-    let jev = jev_answering(|_, _| choice("a", &["b"]));
+    let jev = jev_answering_partially(|name| (name != "fit_c").then(|| score_at(0.5, 4)));
     let spec = RankSpec::new(
         "s",
         "q?",
@@ -347,7 +490,7 @@ async fn rank_rejects_a_reply_that_drops_a_candidate() {
         ],
     );
     let err = Rank::<_, String>::rank(&jev, &input(), &spec).await.unwrap_err();
-    assert!(matches!(err, JevError::BadRanking { got: 2, want: 3, .. }), "{err:?}");
+    assert!(matches!(err, JevError::MissingAnswer { asked: 3, .. }), "{err:?}");
 }
 
 #[tokio::test]
@@ -430,5 +573,101 @@ async fn explain_drops_a_fact_that_will_not_fit_rather_than_cutting_it() {
         let mentioned = out.summary.contains(&phrase);
         let partial = out.summary.contains(&format!("fact number {i}")) && !mentioned;
         assert!(!partial, "fact {i} appears only partially: {}", out.summary);
+    }
+}
+
+#[tokio::test]
+async fn execute_uses_full_size_and_reduce_rejects_full_size() {
+    let jev = jev_answering(|name, _| match name {
+        "action" => choice("execute", &["reduce", "hold", "escalate"]),
+        _ => score_at(0.5, 5),
+    });
+    let out = Gate::gate(&jev, &input(), &GateSpec::new("x", "go?")).await.unwrap();
+    assert_eq!(out.size_factor, 1.0);
+    let jev = jev_answering(|name, _| match name {
+        "action" => choice("reduce", &["execute", "hold", "escalate"]),
+        _ => score_at(1.0, 5),
+    });
+    assert!(matches!(
+        Gate::gate(&jev, &input(), &GateSpec::new("x", "go?")).await,
+        Err(JevError::Contradiction { .. })
+    ));
+    assert!(jev.audit().is_empty());
+}
+
+#[tokio::test]
+async fn rounded_distributions_and_omitted_empty_levels_are_accepted() {
+    // The API reports rounded probabilities; a three-way 0.333 split sums to
+    // 0.999, which is rounding, not a malformed answer.
+    let jev = jev_answering(|name, _| match name {
+        "action" => {
+            let mut p = indexmap::IndexMap::new();
+            p.insert("execute".to_owned(), 0.333);
+            p.insert("reduce".to_owned(), 0.333);
+            p.insert("hold".to_owned(), 0.333);
+            p.insert("escalate".to_owned(), 0.0);
+            Verdict::Choice { label: "execute".into(), probabilities: p, confidence: 0.1 }
+        }
+        _ => {
+            // Only the levels that carry mass; the empty ones are filled in.
+            let probabilities = std::collections::BTreeMap::from([(3, 0.4), (4, 0.6)]);
+            Verdict::Score { score: 3.6, levels: 5, probabilities, confidence: 0.6 }
+        }
+    });
+    let out = Gate::gate(&jev, &input(), &GateSpec::new("x", "go?")).await.unwrap();
+    assert_eq!(out.action, Action::Execute);
+    assert_eq!(jev.audit().len(), 1);
+}
+
+#[tokio::test]
+async fn malformed_distributions_never_become_audited_decisions() {
+    for case in 0..7 {
+        let jev = jev_answering(move |name, _| {
+            if name == "action" {
+                let mut answer = choice("execute", &["reduce", "hold", "escalate"]);
+                if let Verdict::Choice { probabilities, confidence, label } = &mut answer {
+                    match case {
+                        0 => {
+                            probabilities.shift_remove("hold");
+                        }
+                        1 => {
+                            probabilities.insert("hold".into(), -0.1);
+                        }
+                        2 => {
+                            probabilities.insert("hold".into(), 0.5);
+                        }
+                        3 => {
+                            *label = "reduce".into();
+                        }
+                        4 => {
+                            *confidence = 1.1;
+                        }
+                        _ => {}
+                    }
+                }
+                answer
+            } else {
+                let mut answer = score_at(0.5, 5);
+                if let Verdict::Score { score, probabilities, .. } = &mut answer {
+                    match case {
+                        5 => {
+                            *score = 3.0;
+                        }
+                        6 => {
+                            // Dropping the level that carries the mass, not an
+                            // empty one: an omitted empty level is filled in.
+                            probabilities.remove(&2);
+                        }
+                        _ => {}
+                    }
+                }
+                answer
+            }
+        });
+        assert!(
+            Gate::gate(&jev, &input(), &GateSpec::new("x", "go?")).await.is_err(),
+            "case {case}"
+        );
+        assert!(jev.audit().is_empty(), "case {case}");
     }
 }

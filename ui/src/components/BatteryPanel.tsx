@@ -60,6 +60,7 @@ export function BatteryPanel({ runId, result }: { runId: string; result: Battery
           sub={`${pct(result.interventions / Math.max(1, result.days_judged))} of days`}
         />
         <Stat label="escalations" value={num(result.escalations)} sub="sent to a human" />
+        <Stat label="flagged for review" value={num(result.reviews)} sub="thin certainty; gate stands" />
         <Stat label="failed checks" value={num(result.failed_checks)} />
         <Stat
           label="breaches removed"
@@ -267,6 +268,11 @@ function BatteryDayDrawer({
 
           <ScoreCard view={data.risk} title="stage 4 — operational risk" />
           <GateCard view={data.gate} title="stage 5 — the gate" />
+          {data.review && (
+            <Card title="flagged for review" note="code-side policy">
+              <p className="reason">{data.review}</p>
+            </Card>
+          )}
 
           <Card title="what each desk ran" note="at intraday prices">
             <KeyValue

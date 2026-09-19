@@ -37,19 +37,13 @@ pub struct DigestFeatures {
 }
 
 impl JevInput for SessionDigest {
+    /// Only what the counts do not already say: that the run is over and
+    /// logged. The counts and the audience are fields of `features`.
     fn context_block(&self) -> String {
         format!(
-            "A completed {} run is being summarised for {}. Over {} decisions the judgment \
-             layer changed {} of them and sent {} to a human, across {} typed calls, with \
-             {} failed checks. The decision log holds every call and its output.\n\
-             What happened is settled. You are choosing how to present it.",
-            self.features.domain,
-            self.features.audience,
-            self.features.decision_count,
-            self.features.intervention_count,
-            self.features.escalation_count,
-            self.features.jev_calls,
-            self.features.failed_checks,
+            "A completed {} run; `features` holds its totals and who the summary is for. \
+             The decision log holds every call and its output.",
+            self.features.domain
         )
     }
 }

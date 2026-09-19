@@ -1,0 +1,19 @@
+{
+  "framing": {
+    "what": "Which of the offered framings should lead a summary of a decision that has already been made and logged, for the named audience.",
+    "not_for": "Re-deciding the day, softening it, or adding facts that are not in `state.input`.",
+    "audiences": {
+      "trader": "wants the actionable shape: what was put on, what was held back, which condition drove it; assumes the mechanics",
+      "compliance": "wants the control story: that the decision was bounded, that the checks ran, where the record is; assumes nothing about the mechanics",
+      "ops": "wants what might need attention: what was escalated, what is stale, what will repeat tomorrow"
+    }
+  },
+  "severity": {
+    "what": "How serious the logged period was overall, on the levels offered.",
+    "not_for": "Reflecting the audience; the same period has one severity."
+  },
+  "fact": {
+    "what": "Whether one fact from the log belongs in a summary written for the named audience. The same day is a different summary for a trader and for compliance; choose for the audience in front of you.",
+    "not_for": "Judging whether the fact is true; it is taken from the log."
+  }
+}

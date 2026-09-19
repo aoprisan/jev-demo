@@ -12,18 +12,20 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 use typesafe::{Answer, Choice, Client, Noul, Questions, Score};
 
+/// The model pinned unless a caller chooses another: the docs' recommended
+/// alias for the current Jev.
+pub const DEFAULT_MODEL: &str = "jev-latest";
+
 /// The live Jev backend.
 pub struct LiveJev {
     client: Client,
-    model: Option<String>,
+    model: String,
     timeout: Option<Duration>,
 }
 
 impl std::fmt::Debug for LiveJev {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LiveJev")
-            .field("model", &self.model.as_deref().unwrap_or(self.client.default_model()))
-            .finish()
+        f.debug_struct("LiveJev").field("model", &self.model).finish()
     }
 }
 
@@ -36,7 +38,7 @@ impl LiveJev {
                  or run with --mock to use the offline rule-based backend."
             ))
         })?;
-        Ok(Self { client, model: None, timeout: None })
+        Ok(Self { client, model: DEFAULT_MODEL.to_owned(), timeout: None })
     }
 
     /// A client over an already-built SDK client.
@@ -44,12 +46,12 @@ impl LiveJev {
     /// Useful for pointing the backend at a stub server in tests, and for
     /// callers that configure retries, proxies or headers themselves.
     pub fn new(client: Client) -> Self {
-        Self { client, model: None, timeout: None }
+        Self { client, model: DEFAULT_MODEL.to_owned(), timeout: None }
     }
 
-    /// Pin a model, e.g. `jev-latest`.
+    /// Pin a different model.
     pub fn model(mut self, model: impl Into<String>) -> Self {
-        self.model = Some(model.into());
+        self.model = model.into();
         self
     }
 
@@ -58,16 +60,6 @@ impl LiveJev {
         self.timeout = Some(timeout);
         self
     }
-}
-
-/// The state sent to Jev: the primitive's standing instructions, the domain
-/// context block, and the decision state itself.
-fn state_for(call: &JevCall) -> serde_json::Value {
-    serde_json::json!({
-        "instructions": call.instructions,
-        "context": call.context,
-        "state": call.state,
-    })
 }
 
 fn questions_for(call: &JevCall) -> Questions {
@@ -108,10 +100,12 @@ impl JevClient for LiveJev {
 
     async fn ask(&self, call: &JevCall) -> Result<JevReply> {
         let started = Instant::now();
-        let mut request = self.client.system_one(state_for(call), questions_for(call));
-        if let Some(model) = &self.model {
-            request = request.model(model.clone());
-        }
+        // The state goes as built: content only. Every instruction travels in
+        // its question.
+        let mut request = self
+            .client
+            .system_one(call.state.clone(), questions_for(call))
+            .model(self.model.clone());
         if let Some(timeout) = self.timeout {
             request = request.timeout(timeout);
         }

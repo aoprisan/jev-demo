@@ -29,8 +29,9 @@
 //! # Composition
 //!
 //! [`Pipeline`] threads each stage's typed output into the state of every later
-//! stage, so `Classify -> Check -> Score -> Gate` is a real data dependency and
-//! not four unrelated calls.
+//! stage, and [`pipeline::Batch`] fans independent stages into one call, so
+//! `[Classify, Check, Score] -> Gate` is two calls with a real data dependency
+//! between them rather than four unrelated ones.
 
 #![warn(missing_docs)]
 
@@ -42,6 +43,7 @@ mod jev;
 pub mod live;
 pub mod mock;
 pub mod pipeline;
+pub mod policy;
 pub mod primitives;
 pub mod prompts;
 pub mod schema;
@@ -53,12 +55,13 @@ pub use error::{JevError, Result};
 pub use jev::Jev;
 pub use live::LiveJev;
 pub use mock::MockJev;
-pub use pipeline::{Pipeline, PriorEntry, Priors, Staged};
+pub use pipeline::{Batch, BatchOut, Pipeline, PriorEntry, Priors, Slot, Staged};
+pub use policy::ReviewPolicy;
 pub use primitives::{
-    Action, Audience, Candidate, CandidateId, Check, CheckItem, CheckOut, CheckResult, CheckSpec,
-    Classify, ClassifyOut, ClassifySpec, DriverSpec, Evidence, Explain, ExplainOut, ExplainSpec,
-    FactSpec, Framing, Gate, GateOut, GateSpec, JevInput, Label, Rank, RankOut, RankSpec, Ranked,
-    Score, ScoreOut, ScoreSpec, Weight,
+    Action, Audience, Candidate, CandidateId, Check, CheckItem, CheckOut, CheckResult, CheckSource,
+    CheckSpec, Classify, ClassifyOut, ClassifySpec, DriverSpec, Evidence, Explain, ExplainOut,
+    ExplainSpec, FactSpec, Framing, Gate, GateOut, GateSpec, JevInput, Label, Rank, RankOut,
+    RankSpec, Ranked, Score, ScoreOut, ScoreSpec, Weight,
 };
 
 use std::sync::Arc;

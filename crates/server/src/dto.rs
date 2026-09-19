@@ -161,6 +161,8 @@ pub struct FxResult {
     pub interventions: usize,
     /// Decisions sent to a human.
     pub escalations: usize,
+    /// Decisions the review policy flagged on thin certainty. The gate stands.
+    pub reviews: usize,
     /// Named checks that failed, across every decision.
     pub failed_checks: usize,
     /// Each named check held up against the outcomes it flagged.
@@ -307,6 +309,8 @@ pub struct FxDecisionDetail {
     pub risk: ScoreView,
     /// Stage four: the gate.
     pub gate: GateView,
+    /// Why the review policy flagged this decision, if it did.
+    pub review: Option<String>,
     /// The fill the ungated book got.
     pub ungated: Option<FillView>,
     /// The fill the gated book got.
@@ -395,6 +399,8 @@ pub struct BatteryResult {
     pub interventions: usize,
     /// Days sent to a human.
     pub escalations: usize,
+    /// Days the review policy flagged on thin certainty. The gate stands.
+    pub reviews: usize,
     /// Named checks that failed, across every day.
     pub failed_checks: usize,
     /// Cumulative margin for both desks, in day order.
@@ -508,6 +514,8 @@ pub struct BatteryDayDetail {
     pub risk: ScoreView,
     /// Stage five: the gate.
     pub gate: GateView,
+    /// Why the review policy flagged this day, if it did.
+    pub review: Option<String>,
     /// What the solver-only desk ran.
     pub solver_only: ExecutionView,
     /// What the gated desk ran.
@@ -625,8 +633,10 @@ pub struct CheckView {
     pub ok: bool,
     /// Composed from the verdict.
     pub note: String,
-    /// The probability behind it.
+    /// The probability behind it; exactly 0 or 1 for a rule.
     pub p: f32,
+    /// `jev` when Jev judged it, `rule` when the domain decided it in code.
+    pub source: String,
 }
 
 /// A `Score` output.
@@ -666,8 +676,8 @@ pub struct RankedView {
     pub id: String,
     /// Composed from the verdict.
     pub rationale: String,
-    /// Its probability in the single distribution the whole ordering came from.
-    pub p: f32,
+    /// Jev's rating of this candidate's fit, 0..=1 of the shared rubric.
+    pub fit: f32,
 }
 
 /// One label and its probability.
@@ -719,7 +729,7 @@ pub struct CallRow {
     pub latency_ms: u64,
 }
 
-/// One primitive's standing instructions.
+/// One primitive's standing guidance: the JSON merged into each of its questions.
 #[derive(Debug, Clone, Serialize)]
 pub struct PromptView {
     /// Which primitive.

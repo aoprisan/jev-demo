@@ -1,4 +1,9 @@
 //! The mock's rules, stated against the specification they implement.
+//!
+//! The stop, reserve and cycle-budget checks are rules the domain evaluates
+//! in code; here they are stated as rule items with the outcome the features
+//! would give, and the mock reads the same outcome as a flag where a driver
+//! or the gate needs it.
 
 mod common;
 
@@ -50,18 +55,40 @@ impl Label for MarketRegime {
     }
 }
 
-fn fx_checks() -> CheckSpec {
+fn flag(features: &serde_json::Value, key: &str, default: bool) -> bool {
+    features.get(key).and_then(serde_json::Value::as_bool).unwrap_or(default)
+}
+
+fn fx_checks(features: &serde_json::Value) -> CheckSpec {
     CheckSpec::new("trade")
-        .item("stop_sane", "The stop is wide enough.", "wide enough", "too tight")
+        .rule(
+            "stop_sane",
+            "The stop is wide enough.",
+            "wide enough",
+            "too tight",
+            flag(features, "stop_clears_noise", true),
+        )
         .item("signal_valid_in_regime", "The signal suits the regime.", "suits", "does not suit")
         .item("correlated_exposure_ok", "Exposure stays balanced.", "balanced", "concentrated")
 }
 
-fn battery_checks() -> CheckSpec {
+fn battery_checks(features: &serde_json::Value) -> CheckSpec {
     CheckSpec::new("schedule")
-        .item("reserve_ok", "The reserve is respected.", "respected", "breached")
+        .rule(
+            "reserve_ok",
+            "The reserve is respected.",
+            "respected",
+            "breached",
+            !flag(features, "reserve_breached", false),
+        )
         .item("margin_plausible", "The margin is plausible.", "plausible", "implausible")
-        .item("cycle_budget_ok", "The cycle budget holds.", "holds", "nearly spent")
+        .rule(
+            "cycle_budget_ok",
+            "The cycle budget holds.",
+            "holds",
+            "nearly spent",
+            flag(features, "cycles_within_budget", true),
+        )
 }
 
 fn gate_spec() -> GateSpec {
@@ -78,7 +105,7 @@ async fn fx_holds_when_an_event_is_within_three_hours_and_the_stop_is_tight() {
         &input(json!({
             "hours_to_event": 2.0,
             "next_event_kind": "CPI",
-            "stop_atr_multiple": 0.9,
+            "stop_clears_noise": false,
         })),
         &gate_spec(),
     )
@@ -99,7 +126,7 @@ async fn fx_does_not_hold_when_only_one_half_of_the_rule_is_met() {
         &input(json!({
             "hours_to_event": 2.0,
             "next_event_kind": "ECB",
-            "stop_atr_multiple": 1.6,
+            "stop_clears_noise": true,
         })),
         &gate_spec(),
     )
@@ -110,7 +137,7 @@ async fn fx_does_not_hold_when_only_one_half_of_the_rule_is_met() {
     // Stop tight, but no event anywhere near.
     let quiet = Gate::gate(
         &jev,
-        &input(json!({ "hours_to_event": 40.0, "stop_atr_multiple": 0.9 })),
+        &input(json!({ "hours_to_event": 40.0, "stop_clears_noise": false })),
         &gate_spec(),
     )
     .await
@@ -124,9 +151,9 @@ async fn a_tight_stop_alone_reduces_rather_than_holding() {
     // the event from a replay could never change the outcome, and the demo's
     // side-by-side would show two identical records.
     let jev = mock();
-    let features = json!({ "hours_to_event": 40.0, "stop_atr_multiple": 0.8 });
+    let features = json!({ "hours_to_event": 40.0, "stop_clears_noise": false });
     let mut p = Pipeline::new(&jev, "fx");
-    let checks = p.check("sanity", &input(features.clone()), &fx_checks()).await.unwrap();
+    let checks = p.check("sanity", &input(features.clone()), &fx_checks(&features)).await.unwrap();
     assert!(!checks.get("stop_sane").unwrap().ok);
 
     let out = p.gate("gate", &input(features), &gate_spec()).await.unwrap();
@@ -137,11 +164,11 @@ async fn a_tight_stop_alone_reduces_rather_than_holding() {
 #[tokio::test]
 async fn the_event_is_what_turns_a_reduce_into_a_hold() {
     // The same tight stop, judged with and without an imminent release.
-    let tight_stop = |hours: f64| json!({ "hours_to_event": hours, "next_event_kind": "CPI", "stop_atr_multiple": 0.8 });
+    let tight_stop = |hours: f64| json!({ "hours_to_event": hours, "next_event_kind": "CPI", "stop_clears_noise": false });
     let judge = |features: serde_json::Value| async move {
         let jev = mock();
         let mut p = Pipeline::new(&jev, "fx");
-        p.check("sanity", &input(features.clone()), &fx_checks()).await.unwrap();
+        p.check("sanity", &input(features.clone()), &fx_checks(&features)).await.unwrap();
         p.gate("gate", &input(features), &gate_spec()).await.unwrap()
     };
 
@@ -163,7 +190,7 @@ async fn fx_event_hold_boundary_is_the_documented_threshold() {
             &input(json!({
                 "hours_to_event": hours,
                 "next_event_kind": "CPI",
-                "stop_atr_multiple": 1.0,
+                "stop_clears_noise": false,
             })),
             &gate_spec(),
         )
@@ -179,67 +206,46 @@ async fn fx_event_hold_boundary_is_the_documented_threshold() {
 #[tokio::test]
 async fn fx_signal_is_invalid_when_the_window_reads_as_trending() {
     let jev = mock();
-    let trending = Check::check(
-        &jev,
-        &input(json!({ "trend_strength": 0.8, "stop_atr_multiple": 1.5 })),
-        &fx_checks(),
-    )
-    .await
-    .unwrap();
+    let features = json!({ "trend_strength": 0.8, "stop_clears_noise": true });
+    let trending =
+        Check::check(&jev, &input(features.clone()), &fx_checks(&features)).await.unwrap();
     assert!(!trending.get("signal_valid_in_regime").unwrap().ok);
 
-    let ranging = Check::check(
-        &jev,
-        &input(json!({ "trend_strength": 0.2, "stop_atr_multiple": 1.5 })),
-        &fx_checks(),
-    )
-    .await
-    .unwrap();
+    let features = json!({ "trend_strength": 0.2, "stop_clears_noise": true });
+    let ranging =
+        Check::check(&jev, &input(features.clone()), &fx_checks(&features)).await.unwrap();
     assert!(ranging.get("signal_valid_in_regime").unwrap().ok);
 }
 
 #[tokio::test]
 async fn fx_exposure_fails_when_a_trade_doubles_a_currency_past_the_cap() {
     let jev = mock();
-    let doubling = Check::check(
-        &jev,
-        &input(json!({
-            "exposure_multiple": 2.1,
-            "post_trade_exposure_share": 0.44,
-            "stop_atr_multiple": 1.5,
-        })),
-        &fx_checks(),
-    )
-    .await
-    .unwrap();
+    let features = json!({
+        "exposure_multiple": 2.1,
+        "post_trade_exposure_share": 0.44,
+        "stop_clears_noise": true,
+    });
+    let doubling =
+        Check::check(&jev, &input(features.clone()), &fx_checks(&features)).await.unwrap();
     assert!(!doubling.get("correlated_exposure_ok").unwrap().ok);
 
     // Doubling a negligible residual: the book stays spread, so this is fine.
-    let small = Check::check(
-        &jev,
-        &input(json!({
-            "exposure_multiple": 2.4,
-            "post_trade_exposure_share": 0.12,
-            "stop_atr_multiple": 1.5,
-        })),
-        &fx_checks(),
-    )
-    .await
-    .unwrap();
+    let features = json!({
+        "exposure_multiple": 2.4,
+        "post_trade_exposure_share": 0.12,
+        "stop_clears_noise": true,
+    });
+    let small = Check::check(&jev, &input(features.clone()), &fx_checks(&features)).await.unwrap();
     assert!(small.get("correlated_exposure_ok").unwrap().ok);
 
     // Concentrated already, but this trade barely moved it: not this trade's doing.
-    let inherited = Check::check(
-        &jev,
-        &input(json!({
-            "exposure_multiple": 1.1,
-            "post_trade_exposure_share": 0.42,
-            "stop_atr_multiple": 1.5,
-        })),
-        &fx_checks(),
-    )
-    .await
-    .unwrap();
+    let features = json!({
+        "exposure_multiple": 1.1,
+        "post_trade_exposure_share": 0.42,
+        "stop_clears_noise": true,
+    });
+    let inherited =
+        Check::check(&jev, &input(features.clone()), &fx_checks(&features)).await.unwrap();
     assert!(inherited.get("correlated_exposure_ok").unwrap().ok);
 }
 
@@ -280,6 +286,9 @@ async fn battery_ranks_balanced_first_on_an_ordinary_day() {
     .unwrap();
     assert_eq!(out.top().unwrap().id, "balanced");
     assert_eq!(out.ordered.last().unwrap().id, "reserve_heavy");
+    // Each candidate's fit is its own rating, not a share of one distribution.
+    assert!((out.top().unwrap().fit - 1.0).abs() < 1e-6);
+    assert!(out.margin() > 0.2 && out.margin() < 0.3, "aggressive is close behind");
 }
 
 fn schedules() -> RankSpec<String> {
@@ -295,55 +304,32 @@ fn schedules() -> RankSpec<String> {
 }
 
 #[tokio::test]
-async fn battery_reserve_fails_only_when_the_schedule_dips_inside_the_window() {
-    let dips = Check::check(
-        &mock(),
-        &input(json!({
-            "afrr_window_active": true,
-            "schedule_dips_below_reserve_soc": true,
-        })),
-        &battery_checks(),
-    )
-    .await
-    .unwrap();
-    assert!(!dips.get("reserve_ok").unwrap().ok);
-
-    // The same dip outside a window is not a breach: there is nothing to hold.
-    let outside = Check::check(
-        &mock(),
-        &input(json!({
-            "afrr_window_active": false,
-            "schedule_dips_below_reserve_soc": true,
-        })),
-        &battery_checks(),
-    )
-    .await
-    .unwrap();
-    assert!(outside.get("reserve_ok").unwrap().ok);
+async fn battery_holds_on_a_reserve_breach_and_does_not_size_down_into_it() {
+    let features = json!({ "afrr_window_active": true, "reserve_breached": true });
+    let jev = mock();
+    let mut p = Pipeline::new(&jev, "battery");
+    let checks =
+        p.check("sanity", &input(features.clone()), &battery_checks(&features)).await.unwrap();
+    assert!(!checks.get("reserve_ok").unwrap().ok);
+    let out = p.gate("gate", &input(features), &gate_spec()).await.unwrap();
+    assert_eq!(out.action, Action::Hold);
+    assert_eq!(out.size_factor, 0.0);
 }
 
 #[tokio::test]
 async fn battery_margin_is_implausible_beyond_two_sigma_of_intraday_deviation() {
-    let wild = Check::check(
-        &mock(),
-        &input(json!({ "id_deviation_sigmas": thresholds::ID_DEVIATION_SIGMA + 0.5 })),
-        &battery_checks(),
-    )
-    .await
-    .unwrap();
+    let check = |sigmas: f64| async move {
+        let features = json!({ "id_deviation_sigmas": sigmas });
+        Check::check(&mock(), &input(features.clone()), &battery_checks(&features)).await.unwrap()
+    };
+    let wild = check(thresholds::ID_DEVIATION_SIGMA + 0.5).await;
     assert!(!wild.get("margin_plausible").unwrap().ok);
 
-    let calm =
-        Check::check(&mock(), &input(json!({ "id_deviation_sigmas": 1.0 })), &battery_checks())
-            .await
-            .unwrap();
+    let calm = check(1.0).await;
     assert!(calm.get("margin_plausible").unwrap().ok);
 
     // The rule is on the magnitude, so a large negative deviation fails too.
-    let negative =
-        Check::check(&mock(), &input(json!({ "id_deviation_sigmas": -3.0 })), &battery_checks())
-            .await
-            .unwrap();
+    let negative = check(-3.0).await;
     assert!(!negative.get("margin_plausible").unwrap().ok);
 }
 
@@ -354,10 +340,10 @@ async fn battery_reduces_when_the_regime_is_volatile_and_cycles_are_near_budget(
         "volatility_percentile": 0.85,
         "stress_indicator": 0.0,
         "spread_percentile": 0.2,
-        "cycle_budget_used_fraction": 0.9,
+        "cycles_within_budget": false,
         "afrr_window_active": false,
         "id_deviation_sigmas": 0.3,
-        "schedule_dips_below_reserve_soc": false,
+        "reserve_breached": false,
     });
     let mut p = Pipeline::new(&jev, "battery");
     let regime: jev_core::ClassifyOut<MarketRegime> = p
@@ -376,7 +362,7 @@ async fn an_implausible_margin_escalates_rather_than_resizing() {
     let jev = mock();
     let features = json!({ "id_deviation_sigmas": 4.0 });
     let mut p = Pipeline::new(&jev, "battery");
-    p.check("sanity", &input(features.clone()), &battery_checks()).await.unwrap();
+    p.check("sanity", &input(features.clone()), &battery_checks(&features)).await.unwrap();
     let out = p.gate("gate", &input(features), &gate_spec()).await.unwrap();
 
     assert_eq!(out.action, Action::Escalate, "an implausible input is for a human");
@@ -388,7 +374,7 @@ async fn an_implausible_margin_escalates_rather_than_resizing() {
 #[tokio::test]
 async fn the_mock_is_deterministic() {
     let features =
-        json!({ "hours_to_event": 2.0, "next_event_kind": "NFP", "stop_atr_multiple": 0.8 });
+        json!({ "hours_to_event": 2.0, "next_event_kind": "NFP", "stop_clears_noise": false });
     let a = Gate::gate(&mock(), &input(features.clone()), &gate_spec()).await.unwrap();
     let b = Gate::gate(&mock(), &input(features), &gate_spec()).await.unwrap();
     assert_eq!(a, b);

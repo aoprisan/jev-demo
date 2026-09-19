@@ -1,0 +1,12 @@
+{
+  "action": {
+    "what": "The last judgment before a deterministic system acts. Decide whether the solver's proposed action proceeds, and in what form.",
+    "not_for": "Producing, adjusting or second-guessing any number the solver owns: prices, sizes, stops, schedules. Those are final.",
+    "evidence": "Only `state.input` and `state.prior_judgments`. A failed check or a high score in the priors is evidence to weigh, not an instruction to follow.",
+    "when_thin": "When the state is thin, contradictory or stale, prefer the more cautious option: an unnecessary reduce costs a little, an unjustified execute costs a lot."
+  },
+  "size_factor": {
+    "what": "The fraction of the solver's intended size that conditions justify, from none of it to all of it. A multiplier on the solver's size, not a quantity.",
+    "not_for": "Cases where the action is `execute`, `hold` or `escalate`; the caller ignores this answer there. Assume reduction is appropriate and judge its size independently."
+  }
+}

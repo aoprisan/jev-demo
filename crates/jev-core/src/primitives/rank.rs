@@ -1,14 +1,19 @@
 //! `Rank<I, T>` — order solver-produced candidates by fit to the conditions.
 //!
-//! A single Choice question does the whole job: the label Jev picks is the
-//! winner, and the distribution behind it *is* the ordering. One call, N
-//! candidates, and the margins come out with it.
+//! One Score question per candidate, all in one call, on a shared fit rubric.
+//! Each candidate is rated on its own terms against the same state, and the
+//! ordering is read off the ratings in code. That is what makes the ordering
+//! honest: a single Choice over the candidates would say which one is *best*,
+//! and the mass it left on the others would be the probability that *they* are
+//! best — not a second place, a third place, or a margin. Comparable
+//! per-candidate ratings give all three.
 
-use super::{at_most_chars, fit, in_range, need_choice, Evidence, JevInput, Weight};
+use super::{at_most_chars, fit, in_range, need_score, Evidence, JevInput, Weight};
 use crate::ask::{Ask, Asks};
-use crate::client::Primitive;
+use crate::client::{JevReply, Primitive};
 use crate::error::{JevError, Result};
 use crate::jev::Jev;
+use crate::prompts;
 use schemars::JsonSchema;
 use serde::Serialize;
 use std::collections::HashSet;
@@ -52,20 +57,39 @@ impl<T> Candidate<T> {
 pub struct RankSpec<T> {
     /// A short name for the subject.
     pub subject: String,
-    /// The question put to Jev alongside the standing rank instructions.
+    /// The question put to Jev about each candidate.
     pub question: String,
-    /// The candidates, in offer order. All of them are valid; Jev orders them.
+    /// The candidates, in offer order. All of them are valid; Jev rates them.
     pub candidates: Vec<Candidate<T>>,
+    /// The fit rubric every candidate is rated on, lowest first.
+    pub fit_levels: Vec<String>,
 }
 
 impl<T: CandidateId> RankSpec<T> {
-    /// A ranking question over the given candidates.
+    /// A ranking question over the given candidates, on the default four-level
+    /// fit rubric (unsuited / workable / good fit / best fit).
     pub fn new(
         subject: impl Into<String>,
         question: impl Into<String>,
         candidates: Vec<Candidate<T>>,
     ) -> Self {
-        Self { subject: subject.into(), question: question.into(), candidates }
+        Self {
+            subject: subject.into(),
+            question: question.into(),
+            candidates,
+            fit_levels: vec![
+                "Unsuited: today's conditions work against what this candidate does.".into(),
+                "Workable: nothing today argues against it, and nothing argues for it.".into(),
+                "Good fit: today's conditions favour this candidate's trade-offs.".into(),
+                "Best fit: today's conditions call for exactly this candidate's trade-offs.".into(),
+            ],
+        }
+    }
+
+    /// Replace the fit rubric.
+    pub fn fit_levels<I: IntoIterator<Item = S>, S: Into<String>>(mut self, levels: I) -> Self {
+        self.fit_levels = levels.into_iter().map(Into::into).collect();
+        self
     }
 }
 
@@ -76,8 +100,8 @@ pub struct Ranked<T> {
     pub id: T,
     /// Composed from the verdict; at most 160 characters.
     pub rationale: String,
-    /// The probability mass Jev put on this candidate, 0..=1.
-    pub p: f32,
+    /// Jev's rating of this candidate's fit, 0..=1 of the rubric.
+    pub fit: f32,
 }
 
 /// Every candidate, best first.
@@ -85,29 +109,37 @@ pub struct Ranked<T> {
 pub struct RankOut<T> {
     /// The ordering, best first. Contains exactly the candidates offered.
     pub ordered: Vec<Ranked<T>>,
-    /// Certainty, and the full distribution.
+    /// Mean certainty across the ratings, and every candidate's fit.
     pub evidence: Evidence,
 }
 
-impl<T> RankOut<T> {
+impl<T: CandidateId> RankOut<T> {
     /// The winner.
     pub fn top(&self) -> Option<&Ranked<T>> {
         self.ordered.first()
     }
 
-    /// How far clear the winner is of the runner-up, 0..=1. A small margin means
-    /// the candidates were close, which is itself worth reporting.
+    /// How far the winner's fit is clear of the runner-up's, 0..=1. A small
+    /// margin means the candidates were close, which is itself worth reporting.
     pub fn margin(&self) -> f32 {
         match (self.ordered.first(), self.ordered.get(1)) {
-            (Some(a), Some(b)) => a.p - b.p,
+            (Some(a), Some(b)) => a.fit - b.fit,
             _ => 1.0,
+        }
+    }
+
+    /// The one-line rendering later stages see in `prior_judgments`.
+    pub fn line(&self) -> String {
+        match self.top() {
+            Some(top) => format!("{} first (margin {:.2})", top.id.label(), self.margin()),
+            None => "no candidates".to_owned(),
         }
     }
 
     /// Re-check every schema bound.
     pub fn validate(&self) -> Result<()> {
         for r in &self.ordered {
-            in_range(P, "p", r.p as f64, 0.0, 1.0)?;
+            in_range(P, "fit", r.fit as f64, 0.0, 1.0)?;
             at_most_chars(P, "rationale", &r.rationale, MAX_RATIONALE)?;
         }
         Ok(())
@@ -124,78 +156,97 @@ pub trait Rank<I: JevInput, T: CandidateId> {
 #[async_trait::async_trait]
 impl<I: JevInput, T: CandidateId + Serialize> Rank<I, T> for Jev {
     async fn rank(&self, input: &I, spec: &RankSpec<T>) -> Result<RankOut<T>> {
-        if spec.candidates.len() < 2 {
-            return Err(JevError::InvalidCall("rank needs at least two candidates".into()));
-        }
-        let labels: Vec<String> = spec.candidates.iter().map(|c| c.id.label()).collect();
-        if labels.iter().collect::<HashSet<_>>().len() != labels.len() {
-            return Err(JevError::InvalidCall(
-                "rank candidate labels must be unique within a call".into(),
-            ));
-        }
-
-        let asks = Asks::new().with(
-            "best",
-            Ask::choice(
-                spec.question.clone(),
-                spec.candidates.iter().map(|c| (c.id.label(), c.summary.clone())),
-            ),
-        );
-
-        let outcome = self.call(Primitive::Rank, input, asks).await?;
-        let (_, probabilities, confidence) = need_choice(&outcome.reply, "best", P)?;
-
-        // The distribution is the ranking.
-        let mut weights: Vec<Weight> = probabilities
-            .iter()
-            .map(|(label, p)| Weight { label: label.clone(), p: *p as f32 })
-            .collect();
-        weights.sort_by(|a, b| b.p.total_cmp(&a.p));
-
-        let mut ordered = Vec::with_capacity(spec.candidates.len());
-        let mut seen: HashSet<String> = HashSet::new();
-        for (position, w) in weights.iter().enumerate() {
-            let Some(candidate) = spec.candidates.iter().find(|c| c.id.label() == w.label) else {
-                return Err(JevError::UnknownLabel {
-                    primitive: P,
-                    label: w.label.clone(),
-                    allowed: labels.join(", "),
-                });
-            };
-            if !seen.insert(candidate.id.label()) {
-                continue;
-            }
-            in_range(P, "p", w.p as f64, 0.0, 1.0)?;
-            let rationale = fit(
-                &format!(
-                    "{} of {} for {} (p={:.2}) — {}",
-                    ordinal(position + 1),
-                    spec.candidates.len(),
-                    spec.subject,
-                    w.p,
-                    candidate.summary
-                ),
-                MAX_RATIONALE,
-            );
-            ordered.push(Ranked { id: candidate.id.clone(), rationale, p: w.p });
-        }
-
-        if ordered.len() != spec.candidates.len() {
-            return Err(JevError::BadRanking {
-                primitive: P,
-                got: ordered.len(),
-                want: spec.candidates.len(),
-            });
-        }
-
-        let out = RankOut {
-            ordered,
-            evidence: Evidence { confidence: confidence as f32, distribution: weights },
-        };
-        out.validate()?;
+        let outcome = self.call(Primitive::Rank, input, asks(spec, "")?).await?;
+        let out = compose(spec, &outcome.reply, "")?;
         self.record(&outcome, &out)?;
         Ok(out)
     }
+}
+
+/// The ask name for one candidate.
+fn fit_name(prefix: &str, label: &str) -> String {
+    format!("{prefix}fit_{label}")
+}
+
+/// One fit Score per candidate, on the shared rubric.
+pub(crate) fn asks<T: CandidateId>(spec: &RankSpec<T>, prefix: &str) -> Result<Asks> {
+    if spec.candidates.len() < 2 {
+        return Err(JevError::InvalidCall("rank needs at least two candidates".into()));
+    }
+    if spec.fit_levels.len() < 2 {
+        return Err(JevError::InvalidCall("rank fit rubric needs at least two levels".into()));
+    }
+    let labels: Vec<String> = spec.candidates.iter().map(|c| c.id.label()).collect();
+    if labels.iter().collect::<HashSet<_>>().len() != labels.len() {
+        return Err(JevError::InvalidCall(
+            "rank candidate labels must be unique within a call".into(),
+        ));
+    }
+    let mut asks = Asks::new();
+    for c in &spec.candidates {
+        asks = asks.with(
+            fit_name(prefix, &c.id.label()),
+            Ask::score(
+                prompts::instructions(
+                    Primitive::Rank,
+                    "fit",
+                    spec.question.clone(),
+                    [(
+                        "candidate",
+                        serde_json::json!({ "id": c.id.label(), "summary": c.summary }),
+                    )],
+                ),
+                spec.fit_levels.clone(),
+            ),
+        );
+    }
+    Ok(asks)
+}
+
+/// The ordering, read off the per-candidate ratings.
+pub(crate) fn compose<T: CandidateId>(
+    spec: &RankSpec<T>,
+    reply: &JevReply,
+    prefix: &str,
+) -> Result<RankOut<T>> {
+    let mut rated: Vec<(&Candidate<T>, f64, f64)> = Vec::with_capacity(spec.candidates.len());
+    for c in &spec.candidates {
+        let (fraction, confidence) = need_score(reply, &fit_name(prefix, &c.id.label()), P)?;
+        in_range(P, "fit", fraction, 0.0, 1.0)?;
+        rated.push((c, fraction, confidence));
+    }
+    // Stable, so equal ratings keep their offer order and the result is
+    // deterministic for a given reply.
+    rated.sort_by(|a, b| b.1.total_cmp(&a.1));
+
+    let n = spec.candidates.len();
+    let ordered = rated
+        .iter()
+        .enumerate()
+        .map(|(position, (c, fraction, _))| Ranked {
+            id: c.id.clone(),
+            rationale: fit(
+                &format!(
+                    "{} of {} for {} (fit {:.2}) — {}",
+                    ordinal(position + 1),
+                    n,
+                    spec.subject,
+                    fraction,
+                    c.summary
+                ),
+                MAX_RATIONALE,
+            ),
+            fit: *fraction as f32,
+        })
+        .collect();
+    let confidence = rated.iter().map(|(_, _, c)| c).sum::<f64>() / n as f64;
+    let distribution =
+        rated.iter().map(|(c, f, _)| Weight { label: c.id.label(), p: *f as f32 }).collect();
+
+    let out =
+        RankOut { ordered, evidence: Evidence { confidence: confidence as f32, distribution } };
+    out.validate()?;
+    Ok(out)
 }
 
 fn ordinal(n: usize) -> String {
