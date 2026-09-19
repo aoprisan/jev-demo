@@ -118,9 +118,9 @@ function RunPanel({
     return (
       <Card title={`${run.id} — judging`}>
         <p className="muted">
-          <span className="spin" /> {num(run.calls)} typed calls so far. Each decision is four
-          calls on the forex desk and five on the battery desk, so a full 90-day run is a few
-          hundred.
+          <span className="spin" /> {num(run.calls)} typed calls so far. Each decision is two
+          calls on the forex desk and three on the battery desk — independent stages share a
+          call — so a full 90-day run is a few hundred.
         </p>
       </Card>
     );
