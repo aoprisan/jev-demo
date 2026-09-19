@@ -119,6 +119,44 @@ async fn fx_does_not_hold_when_only_one_half_of_the_rule_is_met() {
 }
 
 #[tokio::test]
+async fn a_tight_stop_alone_reduces_rather_than_holding() {
+    // The conjunction matters. If a failed stop_sane held on its own, removing
+    // the event from a replay could never change the outcome, and the demo's
+    // side-by-side would show two identical records.
+    let jev = mock();
+    let features = json!({ "hours_to_event": 40.0, "stop_atr_multiple": 0.8 });
+    let mut p = Pipeline::new(&jev, "fx");
+    let checks = p.check("sanity", &input(features.clone()), &fx_checks()).await.unwrap();
+    assert!(!checks.get("stop_sane").unwrap().ok);
+
+    let out = p.gate("gate", &input(features), &gate_spec()).await.unwrap();
+    assert_eq!(out.action, Action::Reduce);
+    assert!(out.size_factor > 0.0);
+}
+
+#[tokio::test]
+async fn the_event_is_what_turns_a_reduce_into_a_hold() {
+    // The same tight stop, judged with and without an imminent release.
+    let tight_stop = |hours: f64| {
+        json!({ "hours_to_event": hours, "next_event_kind": "CPI", "stop_atr_multiple": 0.8 })
+    };
+    let judge = |features: serde_json::Value| async move {
+        let jev = mock();
+        let mut p = Pipeline::new(&jev, "fx");
+        p.check("sanity", &input(features.clone()), &fx_checks()).await.unwrap();
+        p.gate("gate", &input(features), &gate_spec()).await.unwrap()
+    };
+
+    let imminent = judge(tight_stop(2.0)).await;
+    let distant = judge(tight_stop(40.0)).await;
+
+    assert_eq!(imminent.action, Action::Hold);
+    assert_eq!(imminent.size_factor, 0.0);
+    assert_eq!(distant.action, Action::Reduce);
+    assert!(distant.size_factor > 0.0);
+}
+
+#[tokio::test]
 async fn fx_event_hold_boundary_is_the_documented_threshold() {
     let jev = mock();
     let at = |hours: f64| async move {

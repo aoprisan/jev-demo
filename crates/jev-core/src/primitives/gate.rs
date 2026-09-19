@@ -126,13 +126,28 @@ impl GateOut {
     pub fn validate(&self) -> Result<()> {
         in_range(P, "size_factor", self.size_factor as f64, 0.0, 1.0)?;
         at_most_chars(P, "reason", &self.reason, MAX_REASON)?;
+        // The action and the size must agree. A hold that carries size, or a
+        // reduce that carries none, is not a decision anyone can act on, and a
+        // caller that silently rounded it either way would be inventing the
+        // judgment rather than reporting it.
         if !self.action.acts() && self.size_factor != 0.0 {
-            return Err(JevError::OutOfRange {
+            return Err(JevError::Contradiction {
                 primitive: P,
-                field: "size_factor",
-                value: self.size_factor as f64,
-                min: 0.0,
-                max: 0.0,
+                detail: format!(
+                    "action `{}` does not act, but size_factor is {}",
+                    self.action.as_str(),
+                    self.size_factor
+                ),
+            });
+        }
+        if self.action.acts() && self.size_factor <= 0.0 {
+            return Err(JevError::Contradiction {
+                primitive: P,
+                detail: format!(
+                    "action `{}` acts, but size_factor is {}",
+                    self.action.as_str(),
+                    self.size_factor
+                ),
             });
         }
         Ok(())
@@ -189,17 +204,19 @@ impl<I: JevInput> Gate<I> for Jev {
         let evidence = evidence_from(probabilities, confidence);
 
         let cue = priors_cue(&outcome.call.state);
+        let top = evidence.distribution.first().map(|w| w.p).unwrap_or(0.0);
         let runner = evidence
             .runner_up()
-            .map(|w| format!(", next {} {:.2}", w.label, w.p))
+            .map(|w| format!("; next {} {:.2}", w.label, w.p))
             .unwrap_or_default();
         let reason = fit(
             &format!(
-                "{}: {} at {:.0}% of size{} (conf {:.2}{})",
+                "{}: {} at {:.0}% of size{} (p={:.2}, conf {:.2}{})",
                 spec.subject,
                 action.as_str(),
                 size_factor * 100.0,
                 cue.map(|c| format!(" — {c}")).unwrap_or_default(),
+                top,
                 confidence,
                 runner,
             ),

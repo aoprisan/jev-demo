@@ -284,9 +284,21 @@ impl<I: JevInput> Explain<I> for Jev {
         if let Some(word) = severity_word {
             summary.push_str(&format!(" The session was {word}."));
         }
-        if !included.is_empty() {
+        // Add facts only while the whole summary still fits. Dropping a fact
+        // that will not fit is honest; cutting one off mid-word reads as a bug
+        // and tells the reader less than leaving it out.
+        let mut kept: Vec<String> = Vec::new();
+        for fact in included {
+            let mut candidate = kept.clone();
+            candidate.push(fact);
+            let attempt = format!("{summary} {}", end_sentence(&join_sentence(&candidate)));
+            if attempt.chars().count() <= MAX_SUMMARY {
+                kept = candidate;
+            }
+        }
+        if !kept.is_empty() {
             summary.push(' ');
-            summary.push_str(&end_sentence(&join_sentence(&included)));
+            summary.push_str(&end_sentence(&join_sentence(&kept)));
         }
         let summary = fit(&summary, MAX_SUMMARY);
 

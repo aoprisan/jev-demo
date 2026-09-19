@@ -5,12 +5,18 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
+description = "jev-desk: the solver owns the numbers, Jev owns the judgment, the schema owns the contract."
 
 [[bin]]
 name = "jev-desk"
 path = "src/main.rs"
 
 [dependencies]
+battery.workspace = true
+fx.workspace = true
+jev-core.workspace = true
+report.workspace = true
+synth.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 serde_json.workspace = true

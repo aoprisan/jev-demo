@@ -213,8 +213,28 @@ pub(crate) fn fit(text: &str, max: usize) -> String {
 /// composed reason can name what moved it. Deterministic; reads only the log.
 pub(crate) fn priors_cue(state: &serde_json::Value) -> Option<String> {
     let priors = state.get("prior_judgments")?.as_array()?;
+
+    // A high risk score outranks a failed check: when both are present it is
+    // the score that drove the verdict, and naming the check instead would
+    // point a reader at the wrong thing.
     for entry in priors {
-        let output = entry.get("output")?;
+        let Some(output) = entry.get("output") else { continue };
+        if let Some(score) = output.get("score").and_then(serde_json::Value::as_u64) {
+            if score >= 75 {
+                let driver = output
+                    .get("drivers")
+                    .and_then(|d| d.as_array())
+                    .and_then(|d| d.first())
+                    .and_then(serde_json::Value::as_str);
+                return Some(match driver {
+                    Some(d) => format!("risk {score}, {d}"),
+                    None => format!("risk {score}"),
+                });
+            }
+        }
+    }
+    for entry in priors {
+        let Some(output) = entry.get("output") else { continue };
         if let Some(checks) = output.get("checks").and_then(|c| c.as_array()) {
             if let Some(failed) = checks
                 .iter()
@@ -227,18 +247,10 @@ pub(crate) fn priors_cue(state: &serde_json::Value) -> Option<String> {
         }
     }
     for entry in priors {
-        let output = entry.get("output")?;
+        let Some(output) = entry.get("output") else { continue };
         if let Some(score) = output.get("score").and_then(serde_json::Value::as_u64) {
             if score >= 60 {
-                let driver = output
-                    .get("drivers")
-                    .and_then(|d| d.as_array())
-                    .and_then(|d| d.first())
-                    .and_then(serde_json::Value::as_str);
-                return Some(match driver {
-                    Some(d) => format!("risk {score}, {d}"),
-                    None => format!("risk {score}"),
-                });
+                return Some(format!("risk {score}"));
             }
         }
     }

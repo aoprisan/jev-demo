@@ -400,60 +400,118 @@ fn choice(
     distribution(&labels, &weights)
 }
 
-/// The gate. Order matters: escalate outranks hold, hold outranks reduce.
-fn gate_weights(labels: &[&str], f: &Features, call: &JevCall) -> Vec<f64> {
-    let w = |target: &str| -> Vec<f64> {
-        labels
-            .iter()
-            .map(|l| if *l == target { 1.0 } else { 0.12 })
-            .collect()
-    };
-    let soft = |target: &str, runner: &str| -> Vec<f64> {
-        labels
-            .iter()
-            .map(|l| {
-                if *l == target {
-                    1.0
-                } else if *l == runner {
-                    0.55
-                } else {
-                    0.1
-                }
-            })
-            .collect()
-    };
+/// One rule's verdict: what to do, and how much of the solver's size it leaves.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Decision {
+    action: &'static str,
+    size: f64,
+}
 
-    // Implausible inputs are for a human, not for sizing down.
+impl Decision {
+    /// How cautious this verdict is. Escalating outranks holding, which
+    /// outranks reducing, which outranks executing.
+    fn caution(&self) -> u8 {
+        match self.action {
+            "escalate" => 3,
+            "hold" => 2,
+            "reduce" => 1,
+            _ => 0,
+        }
+    }
+}
+
+/// Every rule that fires, resolved to a single verdict.
+///
+/// The gate's action and its size come from *one* evaluation, not two. Deriving
+/// them separately lets them contradict each other — a "reduce" carrying a size
+/// of zero, which is not a decision anyone can act on — and `GateOut::validate`
+/// rejects exactly that. The most cautious rule wins; among equally cautious
+/// ones, the smallest size.
+fn decide(f: &Features, call: &JevCall) -> Decision {
+    let mut applicable = vec![Decision { action: "execute", size: 1.0 }];
+
+    // An implausible input is for a human, not for sizing down.
     if prior_check_failed(call, "margin_plausible") {
-        return w("escalate");
+        applicable.push(Decision { action: "escalate", size: 0.0 });
     }
-    // FX: an event within three hours pinning a stop tighter than the window's
-    // volatility justifies is the specified hold.
+    // FX: a release within three hours pinning a stop tighter than the window's
+    // volatility justifies is the specified hold. Note the conjunction — a
+    // tight stop on its own only reduces, below. If it held too, the release
+    // would never be the deciding factor and the event-removed replay in the
+    // demo would print two identical records.
     if fx_event_pins_a_tight_stop(f) {
-        return soft("hold", "reduce");
+        applicable.push(Decision { action: "hold", size: 0.0 });
     }
-    if prior_check_failed(call, "stop_sane") || prior_check_failed(call, "reserve_ok") {
-        return soft("hold", "reduce");
+    // Battery: a reserve breach is not something to size down into.
+    if prior_check_failed(call, "reserve_ok") {
+        applicable.push(Decision { action: "hold", size: 0.0 });
+    }
+    if prior_label(call) == Some("stressed") {
+        applicable.push(Decision { action: "hold", size: 0.0 });
     }
     // Battery: volatile with the cycle budget nearly spent is the specified reduce.
     if prior_label(call) == Some("volatile") && battery_cycles_near_budget(f) {
-        return soft("reduce", "hold");
+        applicable.push(Decision { action: "reduce", size: 0.5 });
     }
-    if prior_label(call) == Some("stressed") {
-        return soft("hold", "reduce");
+    if prior_check_failed(call, "signal_valid_in_regime") {
+        applicable.push(Decision { action: "reduce", size: 0.25 });
     }
-    if prior_check_failed(call, "signal_valid_in_regime")
-        || prior_check_failed(call, "correlated_exposure_ok")
-        || prior_check_failed(call, "cycle_budget_ok")
-    {
-        return soft("reduce", "hold");
+    for check in ["stop_sane", "correlated_exposure_ok", "cycle_budget_ok"] {
+        if prior_check_failed(call, check) {
+            applicable.push(Decision { action: "reduce", size: 0.5 });
+        }
     }
-    match prior_score(call) {
-        Some(s) if s >= 75 => soft("hold", "reduce"),
-        Some(s) if s >= 45 => soft("reduce", "execute"),
-        _ if prior_any_check_failed(call) => soft("reduce", "execute"),
-        _ => soft("execute", "reduce"),
+    if let Some(score) = prior_score(call) {
+        // Calibrated as a desk would: genuinely high risk stands the trade
+        // down, middling risk trims it. Halving a position on a 55-of-100 is
+        // harsher than anyone would actually trade, and since the most cautious
+        // applicable rule wins, a punitive middle band would quietly dominate
+        // every other rule in the table.
+        applicable.push(match score {
+            80..=100 => Decision { action: "hold", size: 0.0 },
+            68..=79 => Decision { action: "reduce", size: 0.5 },
+            55..=67 => Decision { action: "reduce", size: 0.75 },
+            _ => Decision { action: "execute", size: 1.0 },
+        });
     }
+
+    applicable
+        .into_iter()
+        .reduce(|best, next| {
+            let more_cautious = next.caution() > best.caution();
+            let same_but_smaller = next.caution() == best.caution() && next.size < best.size;
+            if more_cautious || same_but_smaller {
+                next
+            } else {
+                best
+            }
+        })
+        .expect("the list always holds the execute default")
+}
+
+/// The gate's action, from the resolved verdict.
+fn gate_weights(labels: &[&str], f: &Features, call: &JevCall) -> Vec<f64> {
+    let decision = decide(f, call);
+    // The runner-up is the next most cautious option, so the distribution
+    // reads the way a real one would rather than putting everything on one label.
+    let runner = match decision.action {
+        "execute" => "reduce",
+        "reduce" => "hold",
+        "hold" => "reduce",
+        _ => "hold",
+    };
+    labels
+        .iter()
+        .map(|l| {
+            if *l == decision.action {
+                1.0
+            } else if *l == runner {
+                0.55
+            } else {
+                0.1
+            }
+        })
+        .collect()
 }
 
 /// Ranking. The reserve-heavy schedule leads whenever the reserve is under
@@ -543,36 +601,11 @@ fn score(name: &str, levels: usize, f: &Features, call: &JevCall) -> Verdict {
     score_distribution(levels, fraction.clamp(0.0, 1.0))
 }
 
-/// How much of the solver's size the conditions justify. Mirrors the gate.
+/// How much of the solver's size the conditions justify.
+///
+/// The same verdict the action came from, so the two can never disagree.
 fn size_fraction(f: &Features, call: &JevCall) -> f64 {
-    if prior_check_failed(call, "margin_plausible") || fx_event_pins_a_tight_stop(f) {
-        return 0.0;
-    }
-    if prior_check_failed(call, "stop_sane") || prior_check_failed(call, "reserve_ok") {
-        return 0.0;
-    }
-    let mut size: f64 = 1.0;
-    if prior_label(call) == Some("volatile") && battery_cycles_near_budget(f) {
-        size = size.min(0.5);
-    }
-    if prior_check_failed(call, "signal_valid_in_regime") {
-        size = size.min(0.25);
-    }
-    if prior_check_failed(call, "correlated_exposure_ok")
-        || prior_check_failed(call, "cycle_budget_ok")
-    {
-        size = size.min(0.5);
-    }
-    if let Some(s) = prior_score(call) {
-        size = size.min(match s {
-            75..=100 => 0.0,
-            60..=74 => 0.25,
-            45..=59 => 0.5,
-            25..=44 => 0.75,
-            _ => 1.0,
-        });
-    }
-    size
+    decide(f, call).size
 }
 
 /// Risk, 0..=1, as the maximum of whichever domain pressures are present.

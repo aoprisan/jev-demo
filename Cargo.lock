@@ -219,8 +219,13 @@ name = "cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "battery",
  "clap",
+ "fx",
+ "jev-core",
+ "report",
  "serde_json",
+ "synth",
  "tokio",
 ]
 
@@ -971,8 +976,13 @@ dependencies = [
 name = "report"
 version = "0.1.0"
 dependencies = [
+ "battery",
+ "fx",
+ "jev-core",
  "serde",
  "serde_json",
+ "synth",
+ "tokio",
 ]
 
 [[package]]

@@ -86,6 +86,15 @@ pub enum JevError {
         want: usize,
     },
 
+    /// Two fields of one output disagree, so the output is not actionable.
+    #[error("{primitive} produced a contradiction: {detail}")]
+    Contradiction {
+        /// The primitive that produced it.
+        primitive: &'static str,
+        /// What disagreed.
+        detail: String,
+    },
+
     /// The call was malformed before it left the process.
     #[error("invalid jev call: {0}")]
     InvalidCall(String),

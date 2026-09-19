@@ -100,12 +100,19 @@ impl<I: JevInput, E: Label + Serialize> Classify<I, E> for Jev {
         in_range(P, "confidence", confidence, 0.0, 1.0)?;
         let evidence = evidence_from(probabilities, confidence);
 
+        // Report the label's own probability alongside the confidence: the two
+        // are different quantities, and printing only the confidence next to a
+        // runner-up's probability invites reading them as comparable.
+        let top = evidence.distribution.first().map(|w| w.p).unwrap_or(0.0);
         let runner = evidence
             .runner_up()
-            .map(|w| format!(", next {} {:.2}", w.label, w.p))
+            .map(|w| format!("; next {} {:.2}", w.label, w.p))
             .unwrap_or_default();
         let reason = fit(
-            &format!("{} reads as {} (conf {:.2}{})", spec.subject, name, confidence, runner),
+            &format!(
+                "{} reads as {} (p={:.2}, conf {:.2}{})",
+                spec.subject, name, top, confidence, runner
+            ),
             MAX_REASON,
         );
 

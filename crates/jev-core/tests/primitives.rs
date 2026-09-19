@@ -102,7 +102,7 @@ async fn gate_rejects_a_missing_answer() {
         if name == "action" {
             choice("execute", &["reduce"])
         } else {
-            score_at(0.0, 5)
+            score_at(1.0, 5)
         }
     })));
     // Sanity: with both answered it succeeds, so the next assertion isolates the miss.
@@ -160,7 +160,37 @@ fn gate_schema_rejects_a_non_acting_action_carrying_size() {
         reason: "x".into(),
         evidence: Evidence::default(),
     };
-    assert!(bad.validate().is_err());
+    assert!(matches!(bad.validate(), Err(JevError::Contradiction { .. })), "{:?}", bad.validate());
+}
+
+#[test]
+fn gate_schema_rejects_an_acting_action_carrying_no_size() {
+    // "Reduce to nothing" is not a decision anyone can act on. Rounding it to a
+    // hold would be inventing the judgment rather than reporting it.
+    for action in [Action::Execute, Action::Reduce] {
+        let bad = GateOut {
+            action,
+            size_factor: 0.0,
+            reason: "x".into(),
+            evidence: Evidence::default(),
+        };
+        assert!(
+            matches!(bad.validate(), Err(JevError::Contradiction { .. })),
+            "{action:?} at zero size should not validate"
+        );
+    }
+}
+
+#[tokio::test]
+async fn gate_errors_rather_than_returning_a_contradiction() {
+    // Jev says reduce; the size rubric says none. The primitive must not
+    // silently pick one of them.
+    let jev = jev_answering(|name, _| match name {
+        "action" => choice("reduce", &["execute", "hold", "escalate"]),
+        _ => score_at(0.0, 5),
+    });
+    let err = Gate::gate(&jev, &input(), &GateSpec::new("x", "go?")).await.unwrap_err();
+    assert!(matches!(err, JevError::Contradiction { .. }), "{err:?}");
 }
 
 // ---- classify ------------------------------------------------------------------------------
@@ -380,4 +410,39 @@ async fn explain_refuses_a_single_framing() {
     let spec = ExplainSpec::new("x", Audience::Ops).framing("only", "d", "l");
     let err = Explain::explain(&jev, &input(), &spec).await.unwrap_err();
     assert!(matches!(err, JevError::InvalidCall(_)), "{err:?}");
+}
+
+#[tokio::test]
+async fn explain_drops_a_fact_that_will_not_fit_rather_than_cutting_it() {
+    // Every fact wants in, and together they cannot fit in 300 characters.
+    let jev = jev_answering(|name, _| match name {
+        "framing" => choice("a", &["b"]),
+        "severity" => score_at(0.5, 4),
+        _ => noul(0.99),
+    });
+    let mut spec = ExplainSpec::new("the session", Audience::Ops)
+        .framing("a", "d", "the layer did something")
+        .framing("b", "d", "the layer did something else");
+    for i in 0..8 {
+        spec = spec.fact(
+            format!("f{i}"),
+            "relevant?",
+            format!("fact number {i} carries a reasonably long clause of its own"),
+        );
+    }
+    let out = Explain::explain(&jev, &input(), &spec).await.unwrap();
+
+    assert!(out.summary.chars().count() <= 300);
+    assert!(
+        !out.summary.contains('\u{2026}'),
+        "a fact was cut off instead of dropped: {}",
+        out.summary
+    );
+    // Whatever it kept, it kept whole.
+    for i in 0..8 {
+        let phrase = format!("fact number {i} carries a reasonably long clause of its own");
+        let mentioned = out.summary.contains(&phrase);
+        let partial = out.summary.contains(&format!("fact number {i}")) && !mentioned;
+        assert!(!partial, "fact {i} appears only partially: {}", out.summary);
+    }
 }

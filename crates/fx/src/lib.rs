@@ -79,6 +79,77 @@ impl FxSession {
     pub fn escalations(&self) -> usize {
         self.count_action(Action::Escalate)
     }
+
+    /// Score one named check against what actually happened.
+    ///
+    /// This is the point of a typed, logged judgment layer: every named
+    /// judgment can be held up against the outcomes of the decisions it
+    /// flagged. The comparison uses the *ungated* fills, because those are what
+    /// would have happened regardless of what the gate did — so the check is
+    /// scored on its own merits rather than on the gate's response to it.
+    pub fn score_check(&self, name: &str) -> CheckScorecard {
+        let outcome = |failed: bool| -> (usize, f64, f64) {
+            let values: Vec<f64> = self
+                .decisions
+                .iter()
+                .filter(|d| {
+                    d.judgment.checks.get(name).is_some_and(|c| !c.ok == failed)
+                })
+                .filter_map(|d| d.ungated.map(|f| f.pnl_bps))
+                .collect();
+            let n = values.len();
+            let mean = if n == 0 { 0.0 } else { values.iter().sum::<f64>() / n as f64 };
+            let wins = values.iter().filter(|v| **v > 0.0).count();
+            let hit = if n == 0 { 0.0 } else { wins as f64 / n as f64 };
+            (n, mean, hit)
+        };
+        let (failed_n, failed_bps, failed_hit) = outcome(true);
+        let (passed_n, passed_bps, passed_hit) = outcome(false);
+        CheckScorecard {
+            name: name.to_owned(),
+            failed_n,
+            failed_bps,
+            failed_hit,
+            passed_n,
+            passed_bps,
+            passed_hit,
+        }
+    }
+}
+
+/// How one named check fared against the outcomes it flagged.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct CheckScorecard {
+    /// The check's name.
+    pub name: String,
+    /// Decisions where it failed.
+    pub failed_n: usize,
+    /// Their mean ungated outcome, in basis points.
+    pub failed_bps: f64,
+    /// Their ungated hit rate.
+    pub failed_hit: f64,
+    /// Decisions where it held.
+    pub passed_n: usize,
+    /// Their mean ungated outcome, in basis points.
+    pub passed_bps: f64,
+    /// Their ungated hit rate.
+    pub passed_hit: f64,
+}
+
+impl CheckScorecard {
+    /// How much worse the flagged decisions did, in basis points.
+    ///
+    /// Positive means the check earned its keep: what it flagged did worse than
+    /// what it passed. Negative means the check is **inverted** — it is flagging
+    /// the better decisions, and acting on it costs money.
+    pub fn edge_bps(&self) -> f64 {
+        self.passed_bps - self.failed_bps
+    }
+
+    /// Whether the check is pointing the wrong way.
+    pub fn inverted(&self) -> bool {
+        self.failed_n > 0 && self.passed_n > 0 && self.edge_bps() < 0.0
+    }
 }
 
 /// Run every pair of a world through the strategy and the judgment pipeline.
