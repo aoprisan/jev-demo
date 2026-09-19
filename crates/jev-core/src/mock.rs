@@ -40,7 +40,11 @@ pub mod thresholds {
     /// FX: above this directional persistence the window reads as trending,
     /// where a mean-reversion signal is not valid.
     pub const TRENDING_STRENGTH: f64 = 0.62;
-    /// FX: a trade may not take a currency past this share of the book.
+    /// FX: a trade multiplying an existing position by at least this much
+    /// counts as doubling it.
+    pub const EXPOSURE_DOUBLING: f64 = 2.0;
+    /// FX: and it is only a problem if it also takes that currency past this
+    /// share of the book.
     pub const EXPOSURE_SHARE_CAP: f64 = 0.35;
     /// Battery: intraday deviation beyond this multiple of recent sigma is implausible.
     pub const ID_DEVIATION_SIGMA: f64 = 2.0;
@@ -187,15 +191,14 @@ fn fx_reads_trending(f: &Features) -> bool {
     f.num("trend_strength").map(|t| t >= thresholds::TRENDING_STRENGTH).unwrap_or(false)
 }
 
-/// FX: the trade would take one currency past the share cap on the book.
+/// FX: the trade doubles a currency the book already holds, *and* that leaves
+/// the currency concentrated. Both halves are required: doubling a negligible
+/// residual is not a risk, and inheriting a large position the trade barely
+/// moves is not this trade's doing.
 fn fx_exposure_doubles(f: &Features) -> bool {
-    match (f.num("post_trade_exposure_share"), f.num("pre_trade_exposure_share")) {
-        (Some(post), Some(pre)) => {
-            post > thresholds::EXPOSURE_SHARE_CAP && post >= pre * 1.8
-        }
-        (Some(post), None) => post > thresholds::EXPOSURE_SHARE_CAP,
-        _ => false,
-    }
+    let multiple = f.num("exposure_multiple").unwrap_or(1.0);
+    let post_share = f.num("post_trade_exposure_share").unwrap_or(0.0);
+    multiple >= thresholds::EXPOSURE_DOUBLING && post_share > thresholds::EXPOSURE_SHARE_CAP
 }
 
 /// Battery: the reserve obligation is live, or a grid notice overlaps the
@@ -643,8 +646,15 @@ fn distribution(labels: &[&str], weights: &[f64]) -> Verdict {
     Verdict::Choice { label, probabilities, confidence }
 }
 
-/// Put mass on the levels either side of `fraction`, so that the weighted score
-/// lands exactly on it and the distribution looks like a real answer.
+/// Put mass on the two levels bracketing `fraction`, and nowhere else.
+///
+/// This is the minimal distribution consistent with the rule, which makes the
+/// weighted score land *exactly* on the value the rule computed. Spreading a
+/// little mass over the remaining levels would look more like a live answer,
+/// but it also drags the weighted score away from the endpoints — so a rule
+/// saying "all of the size" would come back as 95% of it, and the demo's gate
+/// records would read as noise. A live model's distribution will be broader;
+/// the primitive handles either.
 fn score_distribution(levels: usize, fraction: f64) -> Verdict {
     let levels = levels.max(1);
     if levels == 1 {
@@ -660,18 +670,12 @@ fn score_distribution(levels: usize, fraction: f64) -> Verdict {
     let upper = (lower + 1).min(levels - 1);
     let frac = exact - lower as f64;
 
-    // A little mass everywhere keeps the distribution honest about its shape.
-    let mut probabilities: BTreeMap<u32, f64> =
-        (0..levels).map(|i| (i as u32, 0.02)).collect();
+    let mut probabilities: BTreeMap<u32, f64> = BTreeMap::new();
     if lower == upper {
-        *probabilities.entry(lower as u32).or_default() += 0.9;
+        probabilities.insert(lower as u32, 1.0);
     } else {
-        *probabilities.entry(lower as u32).or_default() += 0.9 * (1.0 - frac);
-        *probabilities.entry(upper as u32).or_default() += 0.9 * frac;
-    }
-    let total: f64 = probabilities.values().sum();
-    for p in probabilities.values_mut() {
-        *p /= total;
+        probabilities.insert(lower as u32, 1.0 - frac);
+        probabilities.insert(upper as u32, frac);
     }
     let score: f64 =
         probabilities.iter().map(|(level, p)| *level as f64 * p).sum();

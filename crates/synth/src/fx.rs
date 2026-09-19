@@ -485,10 +485,16 @@ fn generate_headlines(seed: u64, days: u32, calendar: &[CalendarEvent]) -> Vec<H
     out
 }
 
+/// A desk that runs mostly flat, carrying modest residual positions.
+///
+/// The scale matters: residuals of a few tens of units are ones a single
+/// 100k-unit candidate can genuinely concentrate, which is what makes the
+/// "this trade doubles an existing exposure" judgment a live condition rather
+/// than an unreachable one.
 fn starting_book(seed: u64) -> Vec<Exposure> {
     let mut rng = Rng::stream(seed, "fx.book");
     [Currency::Eur, Currency::Usd, Currency::Gbp, Currency::Jpy]
         .iter()
-        .map(|c| Exposure { currency: *c, units: (rng.range(-900.0, 900.0) / 25.0).round() * 25.0 })
+        .map(|c| Exposure { currency: *c, units: (rng.range(-150.0, 150.0) / 10.0).round() * 10.0 })
         .collect()
 }

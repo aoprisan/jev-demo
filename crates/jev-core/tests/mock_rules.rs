@@ -168,7 +168,7 @@ async fn fx_exposure_fails_when_a_trade_doubles_a_currency_past_the_cap() {
     let doubling = Check::check(
         &jev,
         &input(json!({
-            "pre_trade_exposure_share": 0.22,
+            "exposure_multiple": 2.1,
             "post_trade_exposure_share": 0.44,
             "stop_atr_multiple": 1.5,
         })),
@@ -178,12 +178,12 @@ async fn fx_exposure_fails_when_a_trade_doubles_a_currency_past_the_cap() {
     .unwrap();
     assert!(!doubling.get("correlated_exposure_ok").unwrap().ok);
 
-    // Doubling, but still well under the cap: fine.
+    // Doubling a negligible residual: the book stays spread, so this is fine.
     let small = Check::check(
         &jev,
         &input(json!({
-            "pre_trade_exposure_share": 0.05,
-            "post_trade_exposure_share": 0.10,
+            "exposure_multiple": 2.4,
+            "post_trade_exposure_share": 0.12,
             "stop_atr_multiple": 1.5,
         })),
         &fx_checks(),
@@ -192,11 +192,11 @@ async fn fx_exposure_fails_when_a_trade_doubles_a_currency_past_the_cap() {
     .unwrap();
     assert!(small.get("correlated_exposure_ok").unwrap().ok);
 
-    // Over the cap, but the trade barely moved it: also fine, it is not this trade's doing.
+    // Concentrated already, but this trade barely moved it: not this trade's doing.
     let inherited = Check::check(
         &jev,
         &input(json!({
-            "pre_trade_exposure_share": 0.40,
+            "exposure_multiple": 1.1,
             "post_trade_exposure_share": 0.42,
             "stop_atr_multiple": 1.5,
         })),
