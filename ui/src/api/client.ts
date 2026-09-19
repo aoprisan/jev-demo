@@ -9,6 +9,7 @@ import type {
   BatteryDayDetail,
   CallPage,
   CallRecord,
+  CallRequest,
   Domain,
   FxDecisionDetail,
   PromptView,
@@ -99,6 +100,10 @@ export const getCalls = (id: string, offset: number, limit: number): Promise<Cal
 /** One call in full: the state judged, the questions, the verdicts, the output. */
 export const getCall = (id: string, index: number): Promise<CallRecord> =>
   request<CallRecord>(`/runs/${id}/calls/${index}`);
+
+/** The `POST /v1/systemone` body for one call, byte for byte what the live client sends. */
+export const getCallRequest = (id: string, index: number): Promise<CallRequest> =>
+  request<CallRequest>(`/runs/${id}/calls/${index}/request`);
 
 /** One desk's `report.md`, byte for byte what the CLI writes to disk. */
 export const getReport = (id: string, domain: Domain): Promise<string> =>

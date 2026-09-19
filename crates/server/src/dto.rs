@@ -729,6 +729,20 @@ pub struct CallRow {
     pub latency_ms: u64,
 }
 
+/// One call's HTTP request to System One, as the live client builds it.
+#[derive(Debug, Clone, Serialize)]
+pub struct CallRequestView {
+    /// Always `POST`.
+    pub method: String,
+    /// The endpoint.
+    pub url: String,
+    /// Whether this body actually went over the wire (a live call) or is what
+    /// a mock call would have sent.
+    pub sent: bool,
+    /// The body: `{ state, model, questions }`.
+    pub body: serde_json::Value,
+}
+
 /// One primitive's standing guidance: the JSON merged into each of its questions.
 #[derive(Debug, Clone, Serialize)]
 pub struct PromptView {

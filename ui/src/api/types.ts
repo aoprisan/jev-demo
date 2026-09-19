@@ -468,6 +468,16 @@ export interface CallRecord {
   latency_ms: number;
 }
 
+/** One call's HTTP request to System One, as the live client builds it. */
+export interface CallRequest {
+  method: string;
+  url: string;
+  /** Whether this body actually went over the wire, or is what a mock call would have sent. */
+  sent: boolean;
+  /** `{ state, model, questions }`. */
+  body: unknown;
+}
+
 /** One primitive's standing instructions. */
 export interface PromptView {
   primitive: string;

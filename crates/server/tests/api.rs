@@ -252,6 +252,28 @@ async fn the_audit_log_is_paged_and_downloadable() {
     assert!(call["asks"].get("risk.level").is_some());
     assert!(call["asks"]["regime.label"]["instructions"]["not_for"].is_string());
 
+    // And the literal HTTP body for it, in the SDK's wire shape: the state
+    // verbatim, the model, and each question as `{type, instructions, criteria}`.
+    let (status, request) = get(&state, &format!("/api/runs/{id}/calls/0/request")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(keys(&request), ["method", "url", "sent", "body"]);
+    assert_eq!(request["sent"], false, "a mock call never went over the wire");
+    assert_eq!(request["url"], "https://api.typesafe.ai/v1/systemone");
+    let body = &request["body"];
+    assert_eq!(keys(body), ["state", "model", "questions"]);
+    assert_eq!(body["model"], "jev-latest");
+    assert_eq!(body["state"], call["state"]);
+    let label = &body["questions"]["regime.label"];
+    assert_eq!(label["type"], "choice");
+    assert_eq!(label["instructions"], call["asks"]["regime.label"]["instructions"]);
+    assert!(label["criteria"]["trending"].is_string());
+    let level = &body["questions"]["risk.level"];
+    assert_eq!(level["type"], "score");
+    assert_eq!(level["criteria"].as_array().map(Vec::len), Some(5));
+    let noul = &body["questions"]["sanity.signal_valid_in_regime"];
+    assert_eq!(noul["type"], "noul");
+    assert!(noul["criteria"]["true"].is_string());
+
     // The same log the CLI writes: one JSON object per line.
     let (status, jsonl) = text(&state, &format!("/api/runs/{id}/decisions.jsonl")).await;
     assert_eq!(status, StatusCode::OK);

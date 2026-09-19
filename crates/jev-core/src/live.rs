@@ -62,6 +62,23 @@ impl LiveJev {
     }
 }
 
+/// The endpoint the body goes to.
+pub const ENDPOINT: &str = "https://api.typesafe.ai/v1/systemone";
+
+/// The `POST /v1/systemone` body for `call`, exactly as [`LiveJev`] sends it:
+/// the state verbatim, the model, and the questions in the SDK's wire shape,
+/// in offer order. Built from the same translation the live client uses, so
+/// what an audit viewer shows is what a live run put on the wire — for a mock
+/// call, what it would have.
+pub fn wire_request(call: &JevCall, model: &str) -> serde_json::Value {
+    let questions = serde_json::to_value(questions_for(call)).unwrap_or(serde_json::Value::Null);
+    serde_json::json!({
+        "state": call.state,
+        "model": model,
+        "questions": questions,
+    })
+}
+
 fn questions_for(call: &JevCall) -> Questions {
     let mut questions = Questions::new();
     for (name, ask) in call.asks.iter() {

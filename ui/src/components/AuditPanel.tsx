@@ -8,7 +8,7 @@
  */
 
 import { useState } from "react";
-import { decisionsUrl, getCall, getCalls } from "../api/client";
+import { decisionsUrl, getCall, getCallRequest, getCalls } from "../api/client";
 import { clock, ms, num } from "../format";
 import { useFetch } from "../hooks/useApi";
 import { Banner, Card, Drawer, Empty } from "./ui";
@@ -112,6 +112,7 @@ function CallDrawer({
   onClose: () => void;
 }) {
   const { data, error, loading } = useFetch(() => getCall(runId, index), `${runId}/call/${index}`);
+  const request = useFetch(() => getCallRequest(runId, index), `${runId}/call/${index}/request`);
 
   return (
     <Drawer title={`call ${index}`} onClose={onClose}>
@@ -126,6 +127,21 @@ function CallDrawer({
               {ms(data.latency_ms)} · {num((data.input_tokens ?? 0) + (data.output_tokens ?? 0))}{" "}
               tokens
             </pre>
+          </Card>
+          <Card
+            title="the JSON sent to Jev"
+            note={
+              request.data?.sent
+                ? "byte for byte what went over the wire: the state, the model, the questions"
+                : "what a live run sends for this call — the mock answered the same JSON offline"
+            }
+          >
+            {request.error && <Banner kind="bad">{request.error}</Banner>}
+            {request.data && (
+              <div className="scroll-box">
+                <pre>{JSON.stringify(request.data.body, null, 2)}</pre>
+              </div>
+            )}
           </Card>
           <Card title="the questions asked" note="every one is a noul, a choice or a score">
             <div className="scroll-box">

@@ -40,6 +40,7 @@ pub fn api() -> Router<AppState> {
         .route("/runs/{id}/decisions.jsonl", get(decisions_jsonl))
         .route("/runs/{id}/calls", get(calls))
         .route("/runs/{id}/calls/{index}", get(call))
+        .route("/runs/{id}/calls/{index}/request", get(call_request))
         .route("/runs/{id}/fx/decisions/{index}", get(fx_decision))
         .route("/runs/{id}/battery/days/{day}", get(battery_day))
 }
@@ -267,6 +268,32 @@ async fn call(
         .nth(index)
         .map(Json)
         .ok_or_else(|| ApiError::NotFound(format!("run {id} has no call {index}")))
+}
+
+/// The `POST /v1/systemone` body for one call, byte for byte what the live
+/// client sends: the state, the model and the questions in the SDK's wire
+/// shape. For a mock call it is the body a live run would have sent.
+async fn call_request(
+    State(state): State<AppState>,
+    Path((id, index)): Path<(String, usize)>,
+) -> ApiResult<Json<CallRequestView>> {
+    let handle = find(&state, &id)?;
+    let record = handle
+        .audit
+        .records()
+        .into_iter()
+        .nth(index)
+        .ok_or_else(|| ApiError::NotFound(format!("run {id} has no call {index}")))?;
+    let live = record.backend == "jev";
+    let model = if live { record.model.clone() } else { jev_core::live::DEFAULT_MODEL.to_owned() };
+    let call =
+        jev_core::JevCall { primitive: record.primitive, state: record.state, asks: record.asks };
+    Ok(Json(CallRequestView {
+        method: "POST".to_owned(),
+        url: jev_core::live::ENDPOINT.to_owned(),
+        sent: live,
+        body: jev_core::live::wire_request(&call, &model),
+    }))
 }
 
 async fn fx_decision(
