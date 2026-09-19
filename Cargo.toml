@@ -1,0 +1,39 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/jev-core",
+    "crates/synth",
+    "crates/fx",
+    "crates/battery",
+    "crates/report",
+    "crates/cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+jev-core = { path = "crates/jev-core" }
+synth = { path = "crates/synth" }
+fx = { path = "crates/fx" }
+battery = { path = "crates/battery" }
+report = { path = "crates/report" }
+
+anyhow = "1.0"
+async-trait = "0.1"
+clap = { version = "4.5", features = ["derive"] }
+indexmap = { version = "2", features = ["serde"] }
+schemars = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tracing = "0.1"
+typesafe-ai-sdk = "0.2"
+
+[profile.release]
+opt-level = 2
