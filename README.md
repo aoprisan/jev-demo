@@ -316,5 +316,8 @@ wins.
 
 A full 90-day forex run is 858 typed calls — 214 decisions at four calls each,
 plus two `Explain` calls for the report. Battery is 452: 90 days at five calls
-each, plus the same two. Use `--limit N` to judge only the first N days when
-running live.
+each, plus the same two. The replay at the end of each demo judges one more day
+twice, so `decisions.jsonl` carries a handful more lines than the figure the
+report prints.
+
+Use `--limit N` to judge only the first N days when running live.
