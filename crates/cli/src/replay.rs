@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use battery::ScheduleKind;
 use jev_core::{GateOut, Jev};
 use report::fmt::{bold, dim, heading, table};
-use synth::{BatteryWorld, EventKind, FxWorld, Pair};
+use synth::{BatteryWorld, FxWorld, Pair};
 
 /// Column width for the side-by-side panes.
 const PANE: usize = 44;
@@ -22,40 +22,10 @@ pub async fn fx_event_day(
     session: &fx::FxSession,
     params: &fx::StrategyParams,
 ) -> Result<()> {
-    // Pick the candidate that best exercises the rule under test: a release
-    // within three hours, and a stop tighter than the window's own movement.
-    // Falling back to whatever sits nearest a CPI would show a pair of records
-    // that differ in no way a reader could act on.
-    let cpi_days: Vec<u32> =
-        world.calendar.iter().filter(|e| e.kind == EventKind::Cpi).map(|e| e.t.day).collect();
-    if cpi_days.is_empty() {
-        println!("{}", dim("no CPI day in this world; skipping the replay"));
-        return Ok(());
-    }
-
-    let scored = |d: &&fx::DecisionRecord| -> Option<(bool, f64)> {
-        let bars = &world.series_for(d.candidate.pair).bars;
-        let input = fx::build_input(world, bars, &d.candidate, params, &world.book);
-        let f = &input.features;
-        let exercises = f.hours_to_event <= 3.0 && f.stop_atr_multiple < 1.2;
-        Some((exercises, f.hours_to_event))
-    };
-    let Some(record) = session
-        .decisions
-        .iter()
-        .filter(|d| cpi_days.contains(&d.candidate.t.day))
-        .filter(|d| scored(d).is_some_and(|(exercises, _)| exercises))
-        .min_by(|a, b| scored(a).unwrap().1.total_cmp(&scored(b).unwrap().1))
-        .or_else(|| {
-            // Nothing meets both halves; show the candidate closest to a release.
-            session
-                .decisions
-                .iter()
-                .filter(|d| cpi_days.contains(&d.candidate.t.day))
-                .min_by(|a, b| scored(a).unwrap().1.total_cmp(&scored(b).unwrap().1))
-        })
-    else {
-        println!("{}", dim("no candidate on a CPI day; skipping the replay"));
+    // The selection lives in the fx crate, so the terminal replay and the HTTP
+    // API replay the same candidate.
+    let Some(record) = fx::replay_decision(world, &session.decisions, params) else {
+        println!("{}", dim("no CPI candidate in this world; skipping the replay"));
         return Ok(());
     };
     let candidate = record.candidate;
@@ -110,12 +80,7 @@ async fn judge_fx(
 ) -> Result<(GateOut, String, u8)> {
     let bars = &world.series_for(candidate.pair).bars;
     let input = fx::build_input(world, bars, candidate, params, &world.book);
-    let hours = match input.features.next_event_kind.as_deref() {
-        Some(kind) if input.features.hours_to_event < 72.0 => {
-            format!("{kind} in {:.1}h", input.features.hours_to_event)
-        }
-        _ => "none scheduled".to_owned(),
-    };
+    let hours = fx::features::event_label(&input.features);
     let mut pipeline = jev_core::Pipeline::new(jev, "fx-replay");
     let judgment = fx::judge(&mut pipeline, &input, candidate)
         .await
@@ -126,7 +91,7 @@ async fn judge_fx(
 /// Replay one quiet day with a grid notice added over the discharge block.
 pub async fn battery_notice_day(jev: &Jev, world: &BatteryWorld, cli: &Cli) -> Result<()> {
     let horizon = cli.limit.unwrap_or(world.days).min(world.days);
-    let Some(day) = (0..horizon).find(|d| world.grid_notes_on(*d).is_empty()) else {
+    let Some(day) = battery::first_quiet_day(world, horizon) else {
         println!("{}", dim("every day already carries a grid note; skipping the replay"));
         return Ok(());
     };

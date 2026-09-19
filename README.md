@@ -12,6 +12,7 @@ touches a real venue.
 just demo-fx-mock        # forex, offline
 just demo-battery-mock   # battery, offline
 just demo-all-mock       # both, then one summary for Compliance
+just desk                # the same runs in a browser, on :8787
 just test                # the whole suite, offline by construction
 ```
 
@@ -204,6 +205,72 @@ cost.
 
 ---
 
+## The desk in a browser
+
+The same runs, served over HTTP and read by a TypeScript front end. Nothing new
+is computed for the web: `crates/server` starts a run, keeps what it produced,
+and projects it onto wire types; the browser draws them.
+
+```sh
+just desk      # build the UI, then serve it and the API on :8787
+just serve     # the API alone, offline
+just serve-live  # the API against System One; needs TYPESAFE_API_KEY
+just ui-dev    # Vite on :5173, proxying /api to a running `just serve`
+```
+
+A run is started with one POST, judged on a task, and polled while it works —
+the server reports how many typed calls it has made, so the wait has a number
+behind it rather than a spinner. Then:
+
+| | |
+|---|---|
+| `POST /api/runs` | `{ domain, seed, days, limit, mock }` → `202` and a running summary |
+| `GET /api/runs/{id}` | the summary, and the whole result once it is done |
+| `GET /api/runs/{id}/fx/decisions/{i}` | one candidate: the features Jev read, all four stages, both fills |
+| `GET /api/runs/{id}/battery/days/{d}` | one day: all three schedules, all five stages, both executions |
+| `GET /api/runs/{id}/calls` | the audit log, paged; `/calls/{i}` is one call in full |
+| `GET /api/runs/{id}/decisions.jsonl` | the audit log as the CLI writes it, one object per line |
+| `GET /api/runs/{id}/report` | `report.md`, byte for byte |
+| `GET /api/prompts`, `/api/schemas` | the standing instructions and the output schemas |
+
+`--mock` is still the only switch, and it is per request: one process can serve
+both backends, and a live run is refused with a reason rather than a stack
+trace when the key is missing.
+
+### What the page shows that the terminal cannot
+
+The terminal report is a good artefact and the browser serves the same one
+verbatim. What the page adds is the ability to open a single decision and see
+the judgment layer's whole reasoning path as typed values:
+
+- **the two books, side by side**, and the cumulative curves on one shared axis
+  — the only scale on which they are comparable;
+- **the judgment scorecard**, with an inverted check called out as inverted
+  rather than buried in a row: `signal_valid_in_regime` flags the *better*
+  trades, and the page says so;
+- **every stage's distribution**, not just its verdict. A `reason` is composed
+  from the verdict by `jev-core` and cannot assert anything the schema did not
+  carry, so the probabilities are drawn beside the prose;
+- **the replays**, two panes with one fact changed between them;
+- **the audit log**, every call's state, questions, verdicts and typed output,
+  and the same `decisions.jsonl` to download.
+
+### The contract across the boundary
+
+`crates/server/src/dto.rs` declares every response, and
+`ui/src/api/types.ts` mirrors it field for field. Neither generates the other —
+the file that would generate them is a build step to maintain, and this is two
+files to read. What keeps them honest is `crates/server/tests/api.rs`, which
+asserts the key lists the TypeScript interfaces declare, so a field renamed on
+one side fails the Rust test rather than breaking a page at runtime.
+
+The honesty rule the workspace is built on holds over HTTP too, and is tested
+there: a decision's detail endpoint carries the generator's regime in its
+*outcome* row, for scoring the classifier, and never in the features — the
+state a Jev call is actually made on.
+
+---
+
 ## Results, as they actually come out
 
 **Battery** is the clean win. The solver-only desk runs the balanced schedule
@@ -264,13 +331,17 @@ crates/
   battery/      DP arbitrage solver, features, judgment pipeline, execution engine
   report/       terminal and Markdown reports, the Explain stage
   cli/          jev-desk: the three demos, the replays, prompts and schemas
+  server/       jev-desk-server: the same runs as a typed axum JSON API
+ui/             the TypeScript front end: Vite, React, no UI framework
 ```
 
-Rust 2021, tokio, serde, schemars, clap, anyhow, and
+Rust 2021, tokio, serde, schemars, clap, anyhow, axum and tower-http, and
 [`typesafe-ai-sdk`](https://crates.io/crates/typesafe-ai-sdk) for the live
 backend. No other runtime dependencies; the PRNG and the civil-date arithmetic
 are hand-rolled so a seed pins a world exactly, across platforms and across
-dependency updates.
+dependency updates. The front end is React and TypeScript on Vite, and nothing
+else — the charts are inline SVG and the styling is one stylesheet, so there is
+no component library to read around.
 
 ## The synthetic worlds
 
@@ -294,13 +365,14 @@ so adding a headline does not shift the prices generated after it.
 just test     # offline by construction; no test calls the live API
 ```
 
-145 tests, covering synth determinism by seed and the shape of both worlds; the
+155 tests, covering synth determinism by seed and the shape of both worlds; the
 strategy and the solver on fixed fixtures with hand-computed expectations; each
 primitive's schema validation rejecting bad output; the mock's rules stated
 against the specification they implement; both engines' P&L on tiny fixtures;
 that the pipeline passes prior outputs into later stages correctly; that no
-ground truth reaches a judgment call; and the live client's translation in both
-directions, against a stub System One server.
+ground truth reaches a judgment call; the live client's translation in both
+directions, against a stub System One server; and the HTTP API's shape, driven
+through the router itself.
 
 `just check` additionally runs `cargo fmt --check` and `clippy -D warnings`.
 

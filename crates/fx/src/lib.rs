@@ -299,3 +299,51 @@ pub fn without_events_on(world: &FxWorld, day: u32) -> FxWorld {
     clone.headlines.retain(|h| !(h.t.day == day && h.informative));
     clone
 }
+
+/// Pick the decision that best exercises the event rule, for the replay.
+///
+/// The replay's point is to change one thing — whether a release is on the
+/// calendar — and show the judgment move. That only reads as evidence if the
+/// candidate is one the rule can bite on: a release within three hours, and a
+/// stop tighter than the window's own movement. Falling back to whatever sits
+/// nearest a CPI would show a pair of records that differ in no way a reader
+/// could act on, so the strict filter comes first and the nearest candidate is
+/// only the consolation.
+///
+/// Returns `None` when the world has no CPI day, or no candidate on one.
+pub fn replay_decision<'a>(
+    world: &FxWorld,
+    decisions: &'a [DecisionRecord],
+    params: &StrategyParams,
+) -> Option<&'a DecisionRecord> {
+    let cpi_days: Vec<u32> = world
+        .calendar
+        .iter()
+        .filter(|e| e.kind == synth::EventKind::Cpi)
+        .map(|e| e.t.day)
+        .collect();
+    if cpi_days.is_empty() {
+        return None;
+    }
+
+    let features = |d: &DecisionRecord| -> FxFeatures {
+        let bars = &world.series_for(d.candidate.pair).bars;
+        build_input(world, bars, &d.candidate, params, &world.book).features
+    };
+    let on_a_cpi_day = |d: &&DecisionRecord| cpi_days.contains(&d.candidate.t.day);
+
+    decisions
+        .iter()
+        .filter(on_a_cpi_day)
+        .filter(|d| {
+            let f = features(d);
+            f.hours_to_event <= 3.0 && f.stop_atr_multiple < 1.2
+        })
+        .min_by(|a, b| features(a).hours_to_event.total_cmp(&features(b).hours_to_event))
+        .or_else(|| {
+            decisions
+                .iter()
+                .filter(on_a_cpi_day)
+                .min_by(|a, b| features(a).hours_to_event.total_cmp(&features(b).hours_to_event))
+        })
+}
