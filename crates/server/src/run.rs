@@ -133,9 +133,10 @@ async fn fx_replay(
     let candidate = record.candidate;
 
     let without_world = fx::without_events_on(world, candidate.t.day);
-    let (with_event_label, with_event) = judge_once(jev, world, &candidate, params).await?;
+    let (with_event_label, with_event) =
+        judge_once(jev, world, &candidate, params, "fx:replay:with-event").await?;
     let (without_event_label, without_event) =
-        judge_once(jev, &without_world, &candidate, params).await?;
+        judge_once(jev, &without_world, &candidate, params, "fx:replay:without-event").await?;
 
     Ok(Some(FxReplay { index, with_event_label, with_event, without_event_label, without_event }))
 }
@@ -147,11 +148,12 @@ async fn judge_once(
     world: &synth::FxWorld,
     candidate: &fx::TradeCandidate,
     params: &fx::StrategyParams,
+    decision: &str,
 ) -> Result<(String, fx::FxJudgment)> {
     let bars = &world.series_for(candidate.pair).bars;
     let input = fx::build_input(world, bars, candidate, params, &world.book);
     let label = fx::features::event_label(&input.features);
-    let mut pipeline = jev_core::Pipeline::new(jev, "fx-replay");
+    let mut pipeline = jev_core::Pipeline::new(jev, "fx-replay").judging(decision);
     let judgment = fx::judge(&mut pipeline, &input, candidate).await?;
     Ok((label, judgment))
 }
@@ -177,7 +179,7 @@ async fn battery_replay(
     };
 
     let quiet_world = battery::without_grid_notices(world, day);
-    let quiet = battery::judge_day(jev, &quiet_world, day).await?;
+    let quiet = battery::judge_day_as(jev, &quiet_world, day, "battery:replay:quiet").await?;
     let Some((from_hour, to_hour)) = quiet.chosen().discharge_block() else {
         return Ok(None);
     };
@@ -185,7 +187,7 @@ async fn battery_replay(
     let noticed_world = battery::with_grid_notice(world, day, from_hour, to_hour);
     let notice =
         noticed_world.grid_notes_on(day).first().map(|n| n.text.clone()).unwrap_or_default();
-    let noticed = battery::judge_day(jev, &noticed_world, day).await?;
+    let noticed = battery::judge_day_as(jev, &noticed_world, day, "battery:replay:noticed").await?;
 
     Ok(Some(BatteryReplay { day, from_hour, to_hour, notice, quiet, noticed }))
 }

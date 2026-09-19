@@ -8,6 +8,7 @@
 #![warn(missing_docs)]
 
 pub mod battery_report;
+pub mod cost;
 pub mod explain;
 pub mod fmt;
 pub mod fx_report;

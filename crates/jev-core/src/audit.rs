@@ -2,6 +2,7 @@
 //! answers and the typed output it produced, one JSON object per line.
 
 use crate::client::CallRecord;
+use crate::cost::{CostLedger, Rates};
 use crate::error::{JevError, Result};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -70,5 +71,17 @@ impl Audit {
     pub fn totals(&self) -> (u64, u64) {
         let inner = self.inner.lock().expect("audit mutex poisoned");
         inner.records.iter().fold((0, 0), |(t, l), r| (t + r.tokens(), l + r.latency_ms))
+    }
+
+    /// What the calls so far cost at `rates`, totalled and split by decision.
+    pub fn ledger(&self, rates: Rates) -> CostLedger {
+        let inner = self.inner.lock().expect("audit mutex poisoned");
+        CostLedger::of(&inner.records, rates)
+    }
+
+    /// Every call tagged with `decision`, in call order.
+    pub fn records_for(&self, decision: &str) -> Vec<CallRecord> {
+        let inner = self.inner.lock().expect("audit mutex poisoned");
+        inner.records.iter().filter(|r| r.decision.as_deref() == Some(decision)).cloned().collect()
     }
 }

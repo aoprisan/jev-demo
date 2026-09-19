@@ -38,6 +38,7 @@
 pub mod ask;
 pub mod audit;
 pub mod client;
+pub mod cost;
 pub mod error;
 mod jev;
 pub mod live;
@@ -51,6 +52,7 @@ pub mod schema;
 pub use ask::{Ask, Asks, Usage, Verdict};
 pub use audit::Audit;
 pub use client::{CallRecord, JevCall, JevClient, JevReply, Primitive};
+pub use cost::{CostEstimate, CostLedger, Rates};
 pub use error::{JevError, Result};
 pub use jev::Jev;
 pub use live::LiveJev;

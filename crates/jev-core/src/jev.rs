@@ -1,6 +1,7 @@
 //! The `JevClient`-backed implementation shared by all six primitives.
 //!
-//! One handle holds the transport, the audit log and the current pipeline stage.
+//! One handle holds the transport, the audit log, the current pipeline stage
+//! and the decision that stage is judging.
 //! Every primitive goes through [`Jev::call`], so tokens, latency and the full
 //! question/answer pair are recorded in exactly one place.
 
@@ -21,12 +22,13 @@ pub struct CallOutcome {
     pub reply: JevReply,
 }
 
-/// The primitives' shared handle: transport plus audit plus stage.
+/// The primitives' shared handle: transport plus audit plus stage plus decision.
 #[derive(Clone)]
 pub struct Jev {
     client: Arc<dyn JevClient>,
     audit: Arc<Audit>,
     stage: Option<Arc<str>>,
+    decision: Option<Arc<str>>,
 }
 
 impl std::fmt::Debug for Jev {
@@ -34,6 +36,7 @@ impl std::fmt::Debug for Jev {
         f.debug_struct("Jev")
             .field("backend", &self.client.backend())
             .field("stage", &self.stage)
+            .field("decision", &self.decision)
             .field("calls", &self.audit.len())
             .finish()
     }
@@ -42,17 +45,30 @@ impl std::fmt::Debug for Jev {
 impl Jev {
     /// A handle over `client`, logging to a fresh in-memory audit.
     pub fn new(client: Arc<dyn JevClient>) -> Self {
-        Self { client, audit: Arc::new(Audit::new()), stage: None }
+        Self { client, audit: Arc::new(Audit::new()), stage: None, decision: None }
     }
 
     /// A handle over `client`, sharing an existing audit log.
     pub fn with_audit(client: Arc<dyn JevClient>, audit: Arc<Audit>) -> Self {
-        Self { client, audit, stage: None }
+        Self { client, audit, stage: None, decision: None }
     }
 
     /// The same handle, tagging its calls with a pipeline stage name.
     pub fn staged(&self, stage: &str) -> Self {
-        Self { client: self.client.clone(), audit: self.audit.clone(), stage: Some(stage.into()) }
+        Self { stage: Some(stage.into()), ..self.clone() }
+    }
+
+    /// The same handle, tagging its calls with the decision they judge.
+    ///
+    /// Several calls carry the same id — the stages of one pipeline — which is
+    /// what makes the audit log joinable to the decision the domain recorded.
+    pub fn deciding(&self, decision: &str) -> Self {
+        Self { decision: Some(decision.into()), ..self.clone() }
+    }
+
+    /// The decision this handle's calls are tagged with, if any.
+    pub fn decision(&self) -> Option<&str> {
+        self.decision.as_deref()
     }
 
     /// The backend answering these calls (`"jev"` or `"mock"`).
@@ -103,6 +119,7 @@ impl Jev {
             backend: self.client.backend().to_owned(),
             primitive: outcome.call.primitive,
             stage: self.stage.as_ref().map(|s| s.to_string()),
+            decision: self.decision.as_ref().map(|d| d.to_string()),
             model: outcome.reply.model.clone(),
             state: outcome.call.state.clone(),
             asks: outcome.call.asks.clone(),

@@ -24,6 +24,16 @@ pub use strategy::{signals, Side, StrategyParams, TradeCandidate};
 use jev_core::{Action, Jev, Pipeline, Result};
 use synth::{FxWorld, Pair};
 
+/// The audit-log id of the `index`th decision of a session.
+///
+/// A trade is judged in two calls, and both carry this string in
+/// `CallRecord::decision`. The API's decision row carries the same id under
+/// `decision_id`, so the calls a trade made — and what they cost — can be
+/// totalled back onto the trade itself.
+pub fn decision_id(index: usize) -> String {
+    format!("fx:{index:04}")
+}
+
 /// Everything one forex run produced.
 #[derive(Debug)]
 pub struct FxSession {
@@ -199,7 +209,7 @@ pub async fn run_session(
         book.expire(candidate.t);
 
         let input = build_input(world, bars, &candidate, params, &book.exposures());
-        let mut pipeline = Pipeline::new(jev, "fx");
+        let mut pipeline = Pipeline::new(jev, "fx").judging(decision_id(decisions.len()));
         let judgment = judge(&mut pipeline, &input, &candidate).await?;
 
         let ungated = simulate(&candidate, bars, 1.0, params);

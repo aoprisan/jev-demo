@@ -119,14 +119,45 @@ pub struct RunResult {
 }
 
 /// What the judgment layer cost.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+///
+/// The calls, tokens and latency are measured. `est_usd` is an estimate at
+/// `rates`: a mock run bills nothing, and System One's price list is not part
+/// of this repository, so the figure answers what the same calls would cost
+/// rather than what was charged.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct Cost {
     /// Typed calls made.
     pub calls: usize,
     /// Tokens reported, input plus output.
     pub tokens: u64,
+    /// Input tokens reported.
+    pub input_tokens: u64,
+    /// Output tokens reported.
+    pub output_tokens: u64,
     /// Wall-clock milliseconds across every call.
     pub latency_ms: u64,
+    /// Estimated dollars for every call in the run.
+    pub est_usd: f64,
+    /// Estimated dollars for the mean decision, over the decisions that were
+    /// judged. Run-level `Explain` calls belong to no decision and are in
+    /// `est_usd` but not in this.
+    pub est_usd_per_decision: f64,
+    /// How many distinct decisions the run's calls were tagged with.
+    pub decisions: usize,
+    /// The prices the estimate used.
+    pub rates: RatesView,
+}
+
+/// The per-million-token prices behind an estimate.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct RatesView {
+    /// USD per million input tokens.
+    pub input_usd_per_mtok: f64,
+    /// USD per million output tokens.
+    pub output_usd_per_mtok: f64,
+    /// Whether these are the stand-in prices rather than a desk's own, set
+    /// through `JEV_USD_PER_MTOK_IN` and `JEV_USD_PER_MTOK_OUT`.
+    pub assumed: bool,
 }
 
 /// An Explain output as the UI shows it.
@@ -246,6 +277,15 @@ pub struct EquityPoint {
 pub struct FxDecisionRow {
     /// Index into the run's decisions, and the id of its detail endpoint.
     pub index: usize,
+    /// The id every Jev call made about this trade carries in the audit log.
+    /// Two calls judge a forex candidate, and both are tagged with this.
+    pub decision_id: String,
+    /// How many Jev calls that was.
+    pub calls: usize,
+    /// Tokens they reported, input plus output.
+    pub tokens: u64,
+    /// What they came to, at the run's rates. An estimate, never a bill.
+    pub est_usd: f64,
     /// Day of the simulation.
     pub day: u32,
     /// Hour of that day.
@@ -461,6 +501,15 @@ pub struct MarginPoint {
 pub struct BatteryDayRow {
     /// Day of the simulation, and the id of its detail endpoint.
     pub day: u32,
+    /// The id every Jev call made about this day carries in the audit log.
+    /// Three calls judge a battery day, and all three are tagged with this.
+    pub decision_id: String,
+    /// How many Jev calls that was.
+    pub calls: usize,
+    /// Tokens they reported, input plus output.
+    pub tokens: u64,
+    /// What they came to, at the run's rates. An estimate, never a bill.
+    pub est_usd: f64,
     /// The calendar date.
     pub date: String,
     /// The regime Jev classified.
@@ -717,6 +766,9 @@ pub struct CallRow {
     pub primitive: String,
     /// The pipeline stage it came through.
     pub stage: Option<String>,
+    /// The decision it judged, matching a decision row's `decision_id`. The
+    /// report's run-level `Explain` calls judge no one decision.
+    pub decision: Option<String>,
     /// The model that answered.
     pub model: String,
     /// How many questions were asked.

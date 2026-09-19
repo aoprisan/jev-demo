@@ -20,6 +20,10 @@ export const bps = (value: number, digits = 1): string => `${signed(value, digit
 export const ms = (value: number): string =>
   value >= 1000 ? `${nf(1).format(value / 1000)}s` : `${nf(0).format(value)}ms`;
 
+/** A dollar figure, at a precision that suits its size. */
+export const usd = (value: number): string =>
+  value >= 1 ? `$${nf(2).format(value)}` : `$${nf(4).format(value)}`;
+
 /** A wall-clock time, local to the reader. */
 export const clock = (epochMs: number): string =>
   new Date(epochMs).toLocaleTimeString("en-GB", { hour12: false });

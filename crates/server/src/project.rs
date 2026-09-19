@@ -7,7 +7,7 @@
 use crate::dto::*;
 use crate::run::{BatteryRun, FxRun, Outcome};
 use jev_core::{
-    CallRecord, CheckOut, ClassifyOut, Evidence, ExplainOut, GateOut, RankOut, ScoreOut,
+    CallRecord, CheckOut, ClassifyOut, CostLedger, Evidence, ExplainOut, GateOut, RankOut, ScoreOut,
 };
 use serde::Serialize;
 
@@ -82,11 +82,33 @@ pub fn explain_view(out: &ExplainOut) -> ExplainView {
     }
 }
 
+/// What a run's calls cost, as the wire type says it.
+pub fn cost_view(ledger: &CostLedger) -> Cost {
+    let total = ledger.total();
+    let rates = ledger.rates();
+    Cost {
+        calls: total.calls,
+        tokens: total.tokens(),
+        input_tokens: total.input_tokens,
+        output_tokens: total.output_tokens,
+        latency_ms: total.latency_ms,
+        est_usd: total.usd,
+        est_usd_per_decision: ledger.usd_per_decision(),
+        decisions: ledger.decisions(),
+        rates: RatesView {
+            input_usd_per_mtok: rates.input_usd_per_mtok,
+            output_usd_per_mtok: rates.output_usd_per_mtok,
+            assumed: rates.assumed(),
+        },
+    }
+}
+
 /// The whole run, as a client reads it once it is done.
-pub fn run_result(outcome: &Outcome, cost: Cost) -> RunResult {
+pub fn run_result(outcome: &Outcome, ledger: &CostLedger) -> RunResult {
+    let cost = cost_view(ledger);
     RunResult {
-        fx: outcome.fx.as_ref().map(fx_result),
-        battery: outcome.battery.as_ref().map(battery_result),
+        fx: outcome.fx.as_ref().map(|run| fx_result(run, ledger)),
+        battery: outcome.battery.as_ref().map(|run| battery_result(run, ledger)),
         compliance: outcome.compliance.as_ref().map(explain_view),
         cost,
     }
@@ -125,12 +147,24 @@ fn fill_view(fill: &fx::Fill) -> FillView {
     }
 }
 
-/// One decision's row. `index` is what the detail endpoint takes.
-fn fx_row(run: &FxRun, index: usize, record: &fx::DecisionRecord) -> FxDecisionRow {
+/// One decision's row. `index` is what the detail endpoint takes, and what the
+/// audit-log id is built from.
+fn fx_row(
+    run: &FxRun,
+    index: usize,
+    record: &fx::DecisionRecord,
+    ledger: &CostLedger,
+) -> FxDecisionRow {
     let c = &record.candidate;
     let j = &record.judgment;
+    let decision_id = fx::decision_id(index);
+    let cost = ledger.of_decision(&decision_id);
     FxDecisionRow {
         index,
+        decision_id,
+        calls: cost.calls,
+        tokens: cost.tokens(),
+        est_usd: cost.usd,
         day: c.t.day,
         hour: c.t.hour,
         date: run.world.start.plus_days(c.t.day as i64).to_string(),
@@ -162,10 +196,10 @@ fn check_names(first: Option<&CheckOut>) -> Vec<String> {
 }
 
 /// Everything one forex run produced.
-pub fn fx_result(run: &FxRun) -> FxResult {
+pub fn fx_result(run: &FxRun, ledger: &CostLedger) -> FxResult {
     let session = &run.session;
     let decisions: Vec<FxDecisionRow> =
-        session.decisions.iter().enumerate().map(|(i, d)| fx_row(run, i, d)).collect();
+        session.decisions.iter().enumerate().map(|(i, d)| fx_row(run, i, d, ledger)).collect();
 
     let mut ungated_total = 0.0;
     let mut gated_total = 0.0;
@@ -225,7 +259,7 @@ pub fn fx_result(run: &FxRun) -> FxResult {
 }
 
 /// One decision in full, including the features the judgment layer read.
-pub fn fx_detail(run: &FxRun, index: usize) -> Option<FxDecisionDetail> {
+pub fn fx_detail(run: &FxRun, index: usize, ledger: &CostLedger) -> Option<FxDecisionDetail> {
     let record = run.session.decisions.get(index)?;
     let bars = &run.world.series_for(record.candidate.pair).bars;
     // The book the candidate was judged against is the running book, which is
@@ -234,7 +268,7 @@ pub fn fx_detail(run: &FxRun, index: usize) -> Option<FxDecisionDetail> {
     let input = fx::build_input(&run.world, bars, &record.candidate, &run.params, &run.world.book);
     let j = &record.judgment;
     Some(FxDecisionDetail {
-        row: fx_row(run, index, record),
+        row: fx_row(run, index, record, ledger),
         features: input.features,
         headlines: input.headlines,
         regime: classify_view(&j.regime),
@@ -315,10 +349,16 @@ fn execution_view(execution: &battery::Execution) -> ExecutionView {
     }
 }
 
-fn battery_row(record: &battery::DayRecord) -> BatteryDayRow {
+fn battery_row(record: &battery::DayRecord, ledger: &CostLedger) -> BatteryDayRow {
     let j = &record.judgment;
+    let decision_id = battery::decision_id(record.day);
+    let cost = ledger.of_decision(&decision_id);
     BatteryDayRow {
         day: record.day,
+        decision_id,
+        calls: cost.calls,
+        tokens: cost.tokens(),
+        est_usd: cost.usd,
         date: record.date.clone(),
         regime: label_of(&j.regime.label),
         regime_confidence: j.regime.confidence,
@@ -340,7 +380,7 @@ fn battery_row(record: &battery::DayRecord) -> BatteryDayRow {
 }
 
 /// Everything one battery run produced.
-pub fn battery_result(run: &BatteryRun) -> BatteryResult {
+pub fn battery_result(run: &BatteryRun, ledger: &CostLedger) -> BatteryResult {
     let session = &run.session;
     let mut solver_total = 0.0;
     let mut gated_total = 0.0;
@@ -373,21 +413,21 @@ pub fn battery_result(run: &BatteryRun) -> BatteryResult {
         reviews: session.reviews(),
         failed_checks: session.days.iter().map(|d| d.judgment.checks.failed().len()).sum(),
         margin_curve,
-        days: session.days.iter().map(battery_row).collect(),
+        days: session.days.iter().map(|d| battery_row(d, ledger)).collect(),
         replay: battery_replay(run),
     }
 }
 
 /// One day in full: all three schedules, every stage, both executions.
-pub fn battery_detail(run: &BatteryRun, day: u32) -> Option<BatteryDayDetail> {
+pub fn battery_detail(run: &BatteryRun, day: u32, ledger: &CostLedger) -> Option<BatteryDayDetail> {
     let record = run.session.days.iter().find(|d| d.day == day)?;
-    Some(day_detail(record))
+    Some(day_detail(record, ledger))
 }
 
-fn day_detail(record: &battery::DayRecord) -> BatteryDayDetail {
+fn day_detail(record: &battery::DayRecord, ledger: &CostLedger) -> BatteryDayDetail {
     let j = &record.judgment;
     BatteryDayDetail {
-        row: battery_row(record),
+        row: battery_row(record, ledger),
         schedules: record.schedules.iter().map(schedule_view).collect(),
         regime: classify_view(&j.regime),
         ranking: ranked_views(&j.ranking),
@@ -440,6 +480,7 @@ pub fn call_page(records: &[CallRecord], offset: usize, limit: usize) -> CallPag
             backend: r.backend.clone(),
             primitive: r.primitive.as_str().to_owned(),
             stage: r.stage.clone(),
+            decision: r.decision.clone(),
             model: r.model.clone(),
             asks: r.asks.len(),
             input_tokens: r.input_tokens,

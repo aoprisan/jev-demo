@@ -138,3 +138,26 @@ async fn the_readmes_claim_about_the_regime_detector_holds() {
         "the belief behind the rule checks out; it is the inference that does not"
     );
 }
+
+#[tokio::test]
+async fn the_readmes_cost_line_is_what_the_run_produces() {
+    // The mock's token counts are a function of the state it is sent, so a
+    // seed pins the cost line the same way it pins the P&L. If this moves,
+    // the README's `## Cost` block is now wrong.
+    let jev = jev();
+    let world = FxWorld::default_world(DEFAULT_SEED);
+    let params = fx::StrategyParams::default();
+    let session = fx::run_session(&jev, &world, &params, None).await.unwrap();
+    report::fx_report::render(&jev, &world, &session, &params).await.unwrap();
+
+    let ledger = jev.audit().ledger(jev_core::Rates::ASSUMED);
+    let total = ledger.total();
+    assert_eq!(total.calls, 430, "428 for the decisions, two Explain for the report");
+    assert_eq!(total.tokens(), 648_242, "tokens across the run");
+
+    assert_eq!(ledger.decisions(), 214, "every decision tagged, none merged");
+    assert_eq!(ledger.untagged().calls, 2, "the Explain calls judge no one decision");
+
+    close(total.usd, 2.29, 0.005, "estimated cost of a 90-day forex run");
+    close(ledger.usd_per_decision(), 0.0106, 0.0001, "estimated cost per decision");
+}

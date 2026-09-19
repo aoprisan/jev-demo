@@ -115,6 +115,15 @@ pub struct CallRecord {
     pub primitive: Primitive,
     /// Pipeline stage name, when the call came through a [`crate::Pipeline`].
     pub stage: Option<String>,
+    /// The decision this call judges, when the pipeline was told which one.
+    ///
+    /// A trade is judged by more than one call, so this is the join key
+    /// between the audit log and the decision the domain recorded: every call
+    /// a [`crate::Pipeline`] built with `judging(id)` carries that `id`. The
+    /// report's run-level `Explain` calls belong to no one decision and carry
+    /// nothing.
+    #[serde(default)]
+    pub decision: Option<String>,
     /// The model that answered.
     pub model: String,
     /// The state that was judged.

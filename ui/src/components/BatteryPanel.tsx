@@ -10,7 +10,7 @@
 import { useState } from "react";
 import { getBatteryDay } from "../api/client";
 import type { BatteryBook, BatteryResult } from "../api/types";
-import { num, pct, signed, words } from "../format";
+import { num, pct, signed, usd, words } from "../format";
 import { useFetch } from "../hooks/useApi";
 import { Curve, SchedulePlot } from "./charts";
 import { ClassifyCard, GateCard, RankCard, ScoreCard } from "./judgment";
@@ -273,6 +273,20 @@ function BatteryDayDrawer({
               <p className="reason">{data.review}</p>
             </Card>
           )}
+
+          <Card
+            title="what judging it cost"
+            note="every call tagged with this decision"
+          >
+            <KeyValue
+              rows={[
+                ["decision id", data.row.decision_id],
+                ["jev calls", num(data.row.calls)],
+                ["tokens", num(data.row.tokens)],
+                ["est. cost", usd(data.row.est_usd)],
+              ]}
+            />
+          </Card>
 
           <Card title="what each desk ran" note="at intraday prices">
             <KeyValue

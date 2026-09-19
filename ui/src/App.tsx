@@ -17,7 +17,7 @@ import { ReportPanel } from "./components/ReportPanel";
 import { RunLauncher } from "./components/RunLauncher";
 import { RunList } from "./components/RunList";
 import { Banner, Card, Empty, Stat, StatGrid, Tabs } from "./components/ui";
-import { ms, num } from "./format";
+import { ms, num, usd } from "./format";
 import { useRun, useRunList, useServerInfo } from "./hooks/useApi";
 
 type TabId = "fx" | "battery" | "replays" | "audit" | "report" | "catalogue";
@@ -161,6 +161,13 @@ function RunPanel({
           label="judgment time"
           value={ms(cost.latency_ms)}
           sub={run.spec.mock ? "rules, not a model" : "wall clock"}
+        />
+        <Stat
+          label="est. cost"
+          value={usd(cost.est_usd)}
+          sub={`${usd(cost.est_usd_per_decision)} per decision${
+            cost.rates.assumed ? ", assumed rates" : ""
+          }`}
         />
       </StatGrid>
 

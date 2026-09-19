@@ -170,3 +170,45 @@ async fn the_day_limit_bounds_the_run() {
     let session = run_session(&mock_jev(), &world(5), Some(50)).await.unwrap();
     assert_eq!(session.days.len(), 5);
 }
+
+#[tokio::test]
+async fn each_day_is_linked_to_the_three_calls_that_judged_it() {
+    let audit = Arc::new(Audit::new());
+    let jev = Jev::with_audit(Arc::new(MockJev::new()), audit.clone());
+    let session = run_session(&jev, &world(5), None).await.unwrap();
+
+    let records = audit.records();
+    assert!(records.iter().all(|r| r.decision.is_some()), "a session leaves no call untagged");
+    assert_eq!(records.len(), 3 * session.days.len(), "three calls a day");
+
+    for record in &session.days {
+        let id = battery::decision_id(record.day);
+        let calls = audit.records_for(&id);
+        assert_eq!(calls.len(), 3, "{id} was judged in three calls");
+        let stages: Vec<Option<&str>> = calls.iter().map(|c| c.stage.as_deref()).collect();
+        assert_eq!(stages, vec![Some("read"), Some("assess"), Some("gate")]);
+    }
+
+    // The ledger prices each day from its own calls, and the parts add up.
+    let ledger = audit.ledger(jev_core::Rates::ASSUMED);
+    assert_eq!(ledger.decisions(), session.days.len());
+    let summed: f64 = ledger.by_decision().map(|(_, cost)| cost.usd).sum();
+    assert!((summed - ledger.total().usd).abs() < 1e-9);
+}
+
+#[tokio::test]
+async fn a_replayed_day_is_a_decision_of_its_own() {
+    let audit = Arc::new(Audit::new());
+    let jev = Jev::with_audit(Arc::new(MockJev::new()), audit.clone());
+    let w = world(20);
+    let day = 14;
+    judge_day(&jev, &w, day).await.unwrap();
+    battery::judge_day_as(&jev, &without_grid_notices(&w, day), day, "battery:replay:quiet")
+        .await
+        .unwrap();
+
+    // Same day, two worlds: the replay must not be totalled onto the session's
+    // decision for that day.
+    assert_eq!(audit.records_for(&battery::decision_id(day)).len(), 3);
+    assert_eq!(audit.records_for("battery:replay:quiet").len(), 3);
+}

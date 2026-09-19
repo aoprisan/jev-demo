@@ -237,6 +237,25 @@ async fn the_audit_log_is_paged_and_downloadable() {
     let calls = page["calls"].as_array().expect("a page of calls");
     assert_eq!(calls.len(), 2);
     assert_eq!(calls[0]["backend"], "mock");
+    assert_eq!(
+        keys(&calls[0]),
+        [
+            "index",
+            "at_ms",
+            "backend",
+            "primitive",
+            "stage",
+            "decision",
+            "model",
+            "asks",
+            "input_tokens",
+            "output_tokens",
+            "latency_ms"
+        ]
+    );
+    // The two calls that judge one candidate carry the same decision id.
+    assert_eq!(calls[0]["decision"], "fx:0000");
+    assert_eq!(calls[1]["decision"], "fx:0000");
 
     // One call in full: the state judged, the questions, the verdicts, the output.
     // The first call of a forex decision is the batch of three independent stages.
@@ -349,4 +368,69 @@ async fn a_run_is_a_function_of_its_seed() {
     let second = run_to_completion(&state, json!({ "domain": "fx", "days": 6, "seed": 99 })).await;
     assert_eq!(first["result"]["fx"]["decisions"], second["result"]["fx"]["decisions"]);
     assert_ne!(first["id"], second["id"]);
+}
+
+#[tokio::test]
+async fn every_decision_carries_the_calls_that_judged_it_and_what_they_cost() {
+    let state = state();
+    let view = run_to_completion(&state, json!({ "domain": "fx", "days": 8 })).await;
+    let id = view["id"].as_str().expect("a run id").to_owned();
+
+    let cost = &view["result"]["cost"];
+    assert_eq!(
+        keys(cost),
+        [
+            "calls",
+            "tokens",
+            "input_tokens",
+            "output_tokens",
+            "latency_ms",
+            "est_usd",
+            "est_usd_per_decision",
+            "decisions",
+            "rates"
+        ]
+    );
+    assert_eq!(keys(&cost["rates"]), ["input_usd_per_mtok", "output_usd_per_mtok", "assumed"]);
+    assert_eq!(
+        cost["tokens"].as_u64().expect("tokens"),
+        cost["input_tokens"].as_u64().expect("input tokens")
+            + cost["output_tokens"].as_u64().expect("output tokens")
+    );
+    // Nothing was billed — the mock answered — so the figure is what the same
+    // calls would have cost, and it is labelled an estimate throughout.
+    assert!(cost["est_usd"].as_f64().expect("an estimate") > 0.0);
+    assert!(cost["est_usd_per_decision"].as_f64().expect("a per-decision estimate") > 0.0);
+
+    let decisions = view["result"]["fx"]["decisions"].as_array().expect("decisions");
+    let judged = decisions.len() as u64;
+    assert_eq!(
+        cost["decisions"].as_u64().expect("a decision count"),
+        judged + 2,
+        "the replay judges the same candidate twice more, as two decisions of its own"
+    );
+
+    // Each row names the calls behind it, and the audit log agrees.
+    let row = &decisions[0];
+    assert_eq!(row["decision_id"], "fx:0000");
+    assert_eq!(row["calls"], 2);
+
+    let (status, page) = get(&state, &format!("/api/runs/{id}/calls?limit=1000")).await;
+    assert_eq!(status, StatusCode::OK);
+    let calls = page["calls"].as_array().expect("every call");
+    let tagged: Vec<&Value> =
+        calls.iter().filter(|c| c["decision"] == row["decision_id"]).collect();
+    assert_eq!(tagged.len(), 2, "the row's call count is the audit log's");
+    let tokens: u64 = tagged
+        .iter()
+        .map(|c| c["input_tokens"].as_u64().unwrap_or(0) + c["output_tokens"].as_u64().unwrap_or(0))
+        .sum();
+    assert_eq!(row["tokens"].as_u64().expect("the row's tokens"), tokens);
+    assert!(row["est_usd"].as_f64().expect("the row's estimate") > 0.0);
+
+    // The report's Explain calls judge no one decision.
+    assert!(
+        calls.iter().any(|c| c["primitive"] == "explain" && c["decision"].is_null()),
+        "a run-level call is left untagged"
+    );
 }
