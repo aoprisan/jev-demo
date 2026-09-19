@@ -240,6 +240,18 @@ impl BatteryWorld {
         self.headlines.iter().filter(|h| h.day == day).collect()
     }
 
+    /// The mean hourly intraday-to-day-ahead deviation over `day`.
+    ///
+    /// Signed: a positive value means intraday settled above the day-ahead
+    /// curve. This is what is observable about yesterday when today's schedule
+    /// is chosen.
+    pub fn mean_deviation_on(&self, day: u32) -> f64 {
+        let total: f64 = (0..24)
+            .map(|h| self.intraday_hour(day, h) - self.day_ahead[(day * 24 + h) as usize])
+            .sum();
+        total / 24.0
+    }
+
     /// Standard deviation of the last `lookback` days' hourly intraday-to-day-ahead
     /// deviations, up to but not including `day`. The denominator of the mock's
     /// "deviation beyond two sigma" rule.
@@ -318,22 +330,28 @@ fn generate_day_ahead(seed: u64, days: u32, start: Date) -> Vec<f64> {
 }
 
 /// Intraday prints wander around the day-ahead curve and occasionally dislocate.
+///
+/// The deviation has two components. An hourly one mean-reverts quickly, and a
+/// daily one persists from day to day — a structural imbalance, not noise.
+/// Without that second component the previous day's deviation would say nothing
+/// about today's, and a judgment about whether a day-ahead margin estimate is
+/// still believable would have nothing observable to rest on.
 fn generate_intraday(seed: u64, day_ahead: &[f64]) -> Vec<f64> {
     let mut rng = Rng::stream(seed, "battery.id");
     let mut out = Vec::with_capacity(day_ahead.len() * TICKS_PER_HOUR as usize);
-    let mut carry = 0.0_f64;
+    let mut hourly = 0.0_f64;
+    let mut daily = 0.0_f64;
 
     for (i, da) in day_ahead.iter().enumerate() {
-        // Deviation is persistent within a day and mean-reverts across hours.
-        carry = carry * 0.65 + rng.normal() * 4.5;
         if i % 24 == 0 {
-            carry = rng.normal() * 3.0;
+            daily = daily * 0.80 + rng.normal() * 5.0;
         }
+        hourly = hourly * 0.65 + rng.normal() * 4.0;
         // A rare, sharp dislocation: the state the "margin implausible" rule is for.
         let dislocation = if rng.chance(0.012) { rng.normal() * 38.0 } else { 0.0 };
 
         for _ in 0..TICKS_PER_HOUR {
-            out.push(da + carry + dislocation + rng.normal() * 2.2);
+            out.push(da + daily + hourly + dislocation + rng.normal() * 2.2);
         }
     }
     out

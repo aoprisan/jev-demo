@@ -290,3 +290,37 @@ fn fx_calendar_holds_at_most_one_release_of_each_kind_per_month() {
     // Three months of data should carry roughly one of each release per month.
     assert!(w.calendar.len() >= 8, "only {} events in 90 days", w.calendar.len());
 }
+
+#[test]
+fn battery_deviation_persists_from_one_day_to_the_next() {
+    // The "is this margin still believable" judgment needs yesterday's
+    // deviation to say something about today's. Pure hourly noise would not.
+    let w = BatteryWorld::generate(DEFAULT_SEED, 90);
+    let means: Vec<f64> = (0..90).map(|d| w.mean_deviation_on(d)).collect();
+    let mean = means.iter().sum::<f64>() / means.len() as f64;
+
+    let mut covariance = 0.0;
+    let mut variance = 0.0;
+    for pair in means.windows(2) {
+        covariance += (pair[0] - mean) * (pair[1] - mean);
+    }
+    for m in &means {
+        variance += (m - mean).powi(2);
+    }
+    let autocorrelation = covariance / variance;
+    assert!(
+        autocorrelation > 0.3,
+        "day-to-day deviation autocorrelation is only {autocorrelation:.2}"
+    );
+}
+
+#[test]
+fn battery_deviation_sigma_is_positive_and_finite() {
+    let w = BatteryWorld::generate(DEFAULT_SEED, 90);
+    for day in [1u32, 5, 30, 89] {
+        let sigma = w.recent_deviation_sigma(day, 10);
+        assert!(sigma > 0.0 && sigma.is_finite(), "day {day}: {sigma}");
+    }
+    // With no history at all it falls back rather than dividing by zero.
+    assert!(w.recent_deviation_sigma(0, 10) > 0.0);
+}
