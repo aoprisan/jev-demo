@@ -39,7 +39,7 @@ pub fn thousands(value: f64) -> String {
     let digits = whole.to_string();
     let mut out = String::new();
     for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);
@@ -100,9 +100,11 @@ pub fn table(rows: &[Vec<String>]) -> String {
         out.push('\n');
         if index == 0 {
             out.push_str("  ");
-            out.push_str(&dim(
-                &widths.iter().map(|w| "-".repeat(*w)).collect::<Vec<_>>().join("  "),
-            ));
+            out.push_str(&dim(&widths
+                .iter()
+                .map(|w| "-".repeat(*w))
+                .collect::<Vec<_>>()
+                .join("  ")));
             out.push('\n');
         }
     }

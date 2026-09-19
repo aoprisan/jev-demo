@@ -278,10 +278,8 @@ impl FxWorld {
     pub fn generate(seed: u64, days: u32) -> Self {
         let start = Date::new(2025, 1, 6); // a Monday
         let calendar = generate_calendar(seed, days, start);
-        let series = Pair::ALL
-            .iter()
-            .map(|pair| generate_series(seed, *pair, days, &calendar))
-            .collect();
+        let series =
+            Pair::ALL.iter().map(|pair| generate_series(seed, *pair, days, &calendar)).collect();
         FxWorld {
             seed,
             start,
@@ -341,9 +339,7 @@ fn generate_calendar(seed: u64, days: u32, start: Date) -> Vec<CalendarEvent> {
         // produce three of them in a row.
         let cpi_window = 11..=13;
         let cpi_today = cpi_window.contains(&dom)
-            && (11..dom).all(|earlier| {
-                date.plus_days(earlier as i64 - dom as i64).is_weekend()
-            });
+            && (11..dom).all(|earlier| date.plus_days(earlier as i64 - dom as i64).is_weekend());
         let kind = if cpi_today {
             Some(EventKind::Cpi)
         } else if dom <= 7 && date.weekday() == 4 {
@@ -358,7 +354,11 @@ fn generate_calendar(seed: u64, days: u32, start: Date) -> Vec<CalendarEvent> {
         if let Some(kind) = kind {
             // Releases print in the European or US morning.
             let hour = *rng.pick(&[8u32, 12, 14]);
-            events.push(CalendarEvent { t: Stamp::new(day, hour), kind, currency: kind.currency() });
+            events.push(CalendarEvent {
+                t: Stamp::new(day, hour),
+                kind,
+                currency: kind.currency(),
+            });
         }
     }
     events.sort_by_key(|e| e.t.index());
@@ -366,12 +366,7 @@ fn generate_calendar(seed: u64, days: u32, start: Date) -> Vec<CalendarEvent> {
 }
 
 /// A regime-switching random walk, with event bars widened and jumped.
-fn generate_series(
-    seed: u64,
-    pair: Pair,
-    days: u32,
-    calendar: &[CalendarEvent],
-) -> PairSeries {
+fn generate_series(seed: u64, pair: Pair, days: u32, calendar: &[CalendarEvent]) -> PairSeries {
     let mut rng = Rng::stream(seed, &format!("fx.series.{}", pair.code()));
     let total = (days * BARS_PER_DAY) as usize;
     let mut bars = Vec::with_capacity(total);

@@ -16,8 +16,8 @@ pub mod solver;
 pub use engine::{execute, stood_down, summarise, BookResult, Execution};
 pub use features::BatteryFeatures;
 pub use judgment::{
-    build_input, gate_spec, judge, rank_spec, regime_spec, risk_spec, sanity_spec,
-    BatteryDayInput, BatteryJudgment, MarketRegime, ScheduleView,
+    build_input, gate_spec, judge, rank_spec, regime_spec, risk_spec, sanity_spec, BatteryDayInput,
+    BatteryJudgment, MarketRegime, ScheduleView,
 };
 pub use solver::{candidates, solve, Schedule, ScheduleKind};
 
@@ -81,9 +81,7 @@ impl BatterySession {
     pub fn gate_distribution(&self) -> Vec<(Action, usize)> {
         Action::ALL
             .iter()
-            .map(|a| {
-                (*a, self.days.iter().filter(|d| d.judgment.gate.action == *a).count())
-            })
+            .map(|a| (*a, self.days.iter().filter(|d| d.judgment.gate.action == *a).count()))
             .collect()
     }
 

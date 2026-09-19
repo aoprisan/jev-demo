@@ -84,8 +84,8 @@ fn questions_for(call: &JevCall) -> Questions {
                 questions = questions.with(name, q);
             }
             Ask::Score { instructions, levels } => {
-                questions = questions
-                    .with(name, Score::new(instructions.clone(), levels.iter().cloned()));
+                questions =
+                    questions.with(name, Score::new(instructions.clone(), levels.iter().cloned()));
             }
         }
     }

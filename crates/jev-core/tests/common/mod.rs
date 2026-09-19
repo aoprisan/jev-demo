@@ -1,7 +1,11 @@
 //! Shared test fixtures. Not a test module itself.
+//!
+//! Each integration test binary compiles this whole module but uses only part
+//! of it, so unused-item warnings here are an artifact of that, not dead code.
+#![allow(dead_code)]
 
-use jev_core::{Asks, JevCall, JevClient, JevInput, JevReply, Usage, Verdict};
 use indexmap::IndexMap;
+use jev_core::{Asks, JevCall, JevClient, JevInput, JevReply, Usage, Verdict};
 use serde::Serialize;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -26,10 +30,13 @@ impl JevInput for TestInput {
     }
 }
 
+/// How a `Recorder` answers one named question.
+pub type AnswerFn = Box<dyn Fn(&str, &Asks) -> Verdict + Send + Sync>;
+
 /// A backend that records every call it receives and replays scripted verdicts.
 pub struct Recorder {
     pub calls: Mutex<Vec<JevCall>>,
-    answer: Box<dyn Fn(&str, &Asks) -> Verdict + Send + Sync>,
+    answer: AnswerFn,
 }
 
 impl Recorder {

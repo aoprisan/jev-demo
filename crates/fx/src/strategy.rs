@@ -147,11 +147,9 @@ pub fn sma(bars: &[Bar], i: usize, period: usize) -> Option<f64> {
 /// arithmetic in the tests assumes.
 pub fn stdev(bars: &[Bar], i: usize, period: usize) -> Option<f64> {
     let mean = sma(bars, i, period)?;
-    let variance: f64 = bars[i + 1 - period..=i]
-        .iter()
-        .map(|b| (b.close - mean).powi(2))
-        .sum::<f64>()
-        / period as f64;
+    let variance: f64 =
+        bars[i + 1 - period..=i].iter().map(|b| (b.close - mean).powi(2)).sum::<f64>()
+            / period as f64;
     Some(variance.sqrt())
 }
 
@@ -203,12 +201,7 @@ pub fn efficiency_ratio(bars: &[Bar], i: usize, period: usize) -> Option<f64> {
 ///
 /// A close outside the band is a mean-reversion signal back toward the middle:
 /// below the lower band is a long, above the upper band is a short.
-pub fn signal_at(
-    bars: &[Bar],
-    i: usize,
-    pair: Pair,
-    p: &StrategyParams,
-) -> Option<TradeCandidate> {
+pub fn signal_at(bars: &[Bar], i: usize, pair: Pair, p: &StrategyParams) -> Option<TradeCandidate> {
     if i < p.warmup() {
         return None;
     }
@@ -237,9 +230,7 @@ pub fn signal_at(
         Side::Long => close - window.iter().map(|b| b.low).fold(f64::MAX, f64::min),
         Side::Short => window.iter().map(|b| b.high).fold(f64::MIN, f64::max) - close,
     };
-    let distance = (p.stop_sd * sd)
-        .max(swing_distance.max(0.0))
-        .max(p.min_stop_atr * atr);
+    let distance = (p.stop_sd * sd).max(swing_distance.max(0.0)).max(p.min_stop_atr * atr);
     let stop = close - side.sign() * distance;
 
     Some(TradeCandidate {

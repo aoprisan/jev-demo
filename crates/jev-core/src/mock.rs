@@ -84,10 +84,8 @@ impl JevClient for MockJev {
         }
         // Token counts are proportional to what was sent, so the reported cost
         // moves with the size of a call the way a live one would.
-        let input_tokens = (call.instructions.len()
-            + call.context.len()
-            + call.state.to_string().len())
-            / 4;
+        let input_tokens =
+            (call.instructions.len() + call.context.len() + call.state.to_string().len()) / 4;
         let output_tokens = 12 * call.asks.len();
         Ok(JevReply {
             verdicts,
@@ -154,9 +152,7 @@ fn prior_any_check_failed(call: &JevCall) -> bool {
     prior(call, "check")
         .and_then(|o| o.get("checks"))
         .and_then(Value::as_array)
-        .map(|checks| {
-            checks.iter().any(|c| c.get("ok").and_then(Value::as_bool) == Some(false))
-        })
+        .map(|checks| checks.iter().any(|c| c.get("ok").and_then(Value::as_bool) == Some(false)))
         .unwrap_or(false)
 }
 
@@ -177,8 +173,7 @@ fn fx_event_pins_a_tight_stop(f: &Features) -> bool {
     let stop_atr = f.num("stop_atr_multiple");
     match (hours, stop_atr) {
         (Some(h), Some(s)) => {
-            h >= 0.0
-                && h <= thresholds::EVENT_IMMINENT_HOURS
+            (0.0..=thresholds::EVENT_IMMINENT_HOURS).contains(&h)
                 && s < thresholds::STOP_ATR_MULTIPLE
         }
         _ => false,
@@ -216,16 +211,12 @@ fn battery_dips_below_reserve(f: &Features) -> bool {
 
 /// Battery: intraday has moved further from day-ahead than recent variation explains.
 fn battery_id_deviation_implausible(f: &Features) -> bool {
-    f.num("id_deviation_sigmas")
-        .map(|d| d.abs() > thresholds::ID_DEVIATION_SIGMA)
-        .unwrap_or(false)
+    f.num("id_deviation_sigmas").map(|d| d.abs() > thresholds::ID_DEVIATION_SIGMA).unwrap_or(false)
 }
 
 /// Battery: the cycle budget is nearly spent.
 fn battery_cycles_near_budget(f: &Features) -> bool {
-    f.num("cycle_budget_used_fraction")
-        .map(|u| u >= thresholds::CYCLE_BUDGET_NEAR)
-        .unwrap_or(false)
+    f.num("cycle_budget_used_fraction").map(|u| u >= thresholds::CYCLE_BUDGET_NEAR).unwrap_or(false)
 }
 
 // ---- answering -----------------------------------------------------------------------------
@@ -288,14 +279,22 @@ fn noul(name: &str, f: &Features, call: &JevCall) -> f64 {
         },
         "tight_stop" => {
             let stop_atr = f.num("stop_atr_multiple").unwrap_or(1.5);
-            if stop_atr < thresholds::STOP_ATR_MULTIPLE { 0.87 } else { 0.12 }
+            if stop_atr < thresholds::STOP_ATR_MULTIPLE {
+                0.87
+            } else {
+                0.12
+            }
         }
         "trend_pressure" => {
             let t = f.num("trend_strength").unwrap_or(0.3);
             (t * 1.2).clamp(0.03, 0.95)
         }
         "crowded_book" => {
-            if fx_exposure_doubles(f) { 0.86 } else { 0.17 }
+            if fx_exposure_doubles(f) {
+                0.86
+            } else {
+                0.17
+            }
         }
         // --- battery checks ---
         "reserve_ok" => {
@@ -338,14 +337,26 @@ fn noul(name: &str, f: &Features, call: &JevCall) -> f64 {
             (d / (thresholds::ID_DEVIATION_SIGMA * 1.5)).clamp(0.04, 0.96)
         }
         "cycles_nearly_spent" => {
-            if battery_cycles_near_budget(f) { 0.91 } else { 0.13 }
+            if battery_cycles_near_budget(f) {
+                0.91
+            } else {
+                0.13
+            }
         }
         "grid_constraint" => {
-            if f.flag("grid_notice_overlaps_discharge").unwrap_or(false) { 0.89 } else { 0.08 }
+            if f.flag("grid_notice_overlaps_discharge").unwrap_or(false) {
+                0.89
+            } else {
+                0.08
+            }
         }
         "negative_price_hours" => {
             let n = f.num("negative_price_hours").unwrap_or(0.0);
-            if n >= 1.0 { 0.85 } else { 0.1 }
+            if n >= 1.0 {
+                0.85
+            } else {
+                0.1
+            }
         }
         // --- explain facts: chosen by audience, from the session's own totals ---
         _ => explain_fact(key, f, call).unwrap_or_else(|| stable(call, name, 0.35, 0.65)),
@@ -383,12 +394,7 @@ fn explain_fact(key: &str, f: &Features, call: &JevCall) -> Option<f64> {
 }
 
 /// Choice rules: the gate's action, a classification, or a ranking.
-fn choice(
-    name: &str,
-    options: &[(String, String)],
-    f: &Features,
-    call: &JevCall,
-) -> Verdict {
+fn choice(name: &str, options: &[(String, String)], f: &Features, call: &JevCall) -> Verdict {
     let labels: Vec<&str> = options.iter().map(|(l, _)| l.as_str()).collect();
     let weights: Vec<f64> = match name {
         "action" => gate_weights(&labels, f, call),
@@ -658,20 +664,15 @@ fn severity_fraction(f: &Features) -> f64 {
 /// confidence from how far clear the winner is.
 fn distribution(labels: &[&str], weights: &[f64]) -> Verdict {
     let total: f64 = weights.iter().sum::<f64>().max(f64::EPSILON);
-    let probabilities: IndexMap<String, f64> = labels
-        .iter()
-        .zip(weights)
-        .map(|(l, w)| ((*l).to_owned(), w / total))
-        .collect();
-    let (label, top) = probabilities
-        .iter()
-        .fold((String::new(), -1.0), |(bl, bp), (l, p)| {
-            if *p > bp {
-                (l.clone(), *p)
-            } else {
-                (bl, bp)
-            }
-        });
+    let probabilities: IndexMap<String, f64> =
+        labels.iter().zip(weights).map(|(l, w)| ((*l).to_owned(), w / total)).collect();
+    let (label, top) = probabilities.iter().fold((String::new(), -1.0), |(bl, bp), (l, p)| {
+        if *p > bp {
+            (l.clone(), *p)
+        } else {
+            (bl, bp)
+        }
+    });
     let mut sorted: Vec<f64> = probabilities.values().copied().collect();
     sorted.sort_by(|a, b| b.total_cmp(a));
     let runner = sorted.get(1).copied().unwrap_or(0.0);
@@ -710,8 +711,7 @@ fn score_distribution(levels: usize, fraction: f64) -> Verdict {
         probabilities.insert(lower as u32, 1.0 - frac);
         probabilities.insert(upper as u32, frac);
     }
-    let score: f64 =
-        probabilities.iter().map(|(level, p)| *level as f64 * p).sum();
+    let score: f64 = probabilities.iter().map(|(level, p)| *level as f64 * p).sum();
     let top = probabilities.values().copied().fold(0.0_f64, f64::max);
     Verdict::Score { score, levels, probabilities, confidence: top.clamp(0.0, 1.0) }
 }

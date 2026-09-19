@@ -19,10 +19,7 @@ fn the_same_seed_gives_an_identical_fx_world() {
 fn the_same_seed_gives_an_identical_battery_world() {
     let a = BatteryWorld::generate(DEFAULT_SEED, 90);
     let b = BatteryWorld::generate(DEFAULT_SEED, 90);
-    assert_eq!(
-        serde_json::to_string(&a).unwrap(),
-        serde_json::to_string(&b).unwrap()
-    );
+    assert_eq!(serde_json::to_string(&a).unwrap(), serde_json::to_string(&b).unwrap());
 }
 
 #[test]
@@ -101,10 +98,7 @@ fn fx_calendar_lands_on_weekdays_and_covers_every_release() {
         assert!(!date.is_weekend(), "{:?} landed on a weekend", e);
     }
     for kind in [EventKind::Cpi, EventKind::Nfp, EventKind::Ecb, EventKind::Fomc] {
-        assert!(
-            w.calendar.iter().any(|e| e.kind == kind),
-            "{kind:?} never appears in 90 days"
-        );
+        assert!(w.calendar.iter().any(|e| e.kind == kind), "{kind:?} never appears in 90 days");
     }
 }
 
@@ -169,9 +163,8 @@ fn battery_generates_hourly_day_ahead_and_a_tick_level_intraday() {
 #[test]
 fn battery_prices_peak_in_the_evening() {
     let w = BatteryWorld::generate(DEFAULT_SEED, 90);
-    let hour_mean = |hour: usize| -> f64 {
-        (0..90).map(|d| w.day_ahead[d * 24 + hour]).sum::<f64>() / 90.0
-    };
+    let hour_mean =
+        |hour: usize| -> f64 { (0..90).map(|d| w.day_ahead[d * 24 + hour]).sum::<f64>() / 90.0 };
     let evening = hour_mean(19);
     let night = hour_mean(3);
     let midday = hour_mean(13);
@@ -183,11 +176,9 @@ fn battery_prices_peak_in_the_evening() {
 fn battery_has_a_weekly_seasonality() {
     let w = BatteryWorld::generate(DEFAULT_SEED, 90);
     let mean_for = |weekend: bool| -> f64 {
-        let days: Vec<u32> = (0..90)
-            .filter(|d| w.start.plus_days(*d as i64).is_weekend() == weekend)
-            .collect();
-        let total: f64 =
-            days.iter().map(|d| w.day_ahead_for(*d).iter().sum::<f64>() / 24.0).sum();
+        let days: Vec<u32> =
+            (0..90).filter(|d| w.start.plus_days(*d as i64).is_weekend() == weekend).collect();
+        let total: f64 = days.iter().map(|d| w.day_ahead_for(*d).iter().sum::<f64>() / 24.0).sum();
         total / days.len() as f64
     };
     assert!(mean_for(true) < mean_for(false), "weekends should clear lower");

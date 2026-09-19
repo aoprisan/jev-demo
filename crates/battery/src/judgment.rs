@@ -280,9 +280,8 @@ pub async fn judge(
     let regime: ClassifyOut<MarketRegime> =
         pipeline.classify("regime", pre_rank, &regime_spec()).await?;
 
-    let ranking: RankOut<ScheduleKind> = pipeline
-        .rank("rank", pre_rank, &rank_spec(schedules, &pre_rank.candidates))
-        .await?;
+    let ranking: RankOut<ScheduleKind> =
+        pipeline.rank("rank", pre_rank, &rank_spec(schedules, &pre_rank.candidates)).await?;
     let chosen = ranking.top().expect("a ranking of three is never empty").id;
 
     // From here the pipeline judges the schedule that won, so the
@@ -305,11 +304,7 @@ pub async fn judge(
 ///
 /// The schedule-level features describe the balanced schedule: the one a
 /// solver-only desk would run without asking anybody.
-pub fn build_input(
-    world: &BatteryWorld,
-    day: u32,
-    schedules: &[Schedule],
-) -> BatteryDayInput {
+pub fn build_input(world: &BatteryWorld, day: u32, schedules: &[Schedule]) -> BatteryDayInput {
     let default = schedules
         .iter()
         .find(|s| s.kind == ScheduleKind::Balanced)

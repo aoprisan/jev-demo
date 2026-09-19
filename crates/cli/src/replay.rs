@@ -132,9 +132,8 @@ pub async fn battery_notice_day(jev: &Jev, world: &BatteryWorld, cli: &Cli) -> R
     };
 
     let quiet_world = battery::without_grid_notices(world, day);
-    let quiet = battery::judge_day(jev, &quiet_world, day)
-        .await
-        .context("judging the quiet replay day")?;
+    let quiet =
+        battery::judge_day(jev, &quiet_world, day).await.context("judging the quiet replay day")?;
 
     let Some((from, to)) = quiet.chosen().discharge_block() else {
         println!("{}", dim("the chosen schedule does not discharge; skipping the replay"));
@@ -218,7 +217,11 @@ pub async fn battery_notice_day(jev: &Jev, world: &BatteryWorld, cli: &Cli) -> R
                 yes_no(quiet.gated.reserve_held()),
                 yes_no(noticed.gated.reserve_held()),
             ),
-            ("risk", format!("{}/100", quiet.judgment.risk.score), format!("{}/100", noticed.judgment.risk.score)),
+            (
+                "risk",
+                format!("{}/100", quiet.judgment.risk.score),
+                format!("{}/100", noticed.judgment.risk.score),
+            ),
         ],
     );
 
@@ -230,7 +233,11 @@ pub async fn battery_notice_day(jev: &Jev, world: &BatteryWorld, cli: &Cli) -> R
 }
 
 fn yes_no(value: bool) -> String {
-    if value { "yes".into() } else { "no".into() }
+    if value {
+        "yes".into()
+    } else {
+        "no".into()
+    }
 }
 
 /// Print two gate records beside each other, with extra labelled rows above.
@@ -281,10 +288,7 @@ fn print_columns(left: &str, right: &str) {
 fn wrap_lines(text: &str, width: usize) -> Vec<String> {
     text.lines()
         .flat_map(|line| {
-            report::fmt::wrap(line, width, "")
-                .lines()
-                .map(str::to_owned)
-                .collect::<Vec<_>>()
+            report::fmt::wrap(line, width, "").lines().map(str::to_owned).collect::<Vec<_>>()
         })
         .collect()
 }

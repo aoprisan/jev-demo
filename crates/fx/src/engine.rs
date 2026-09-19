@@ -67,6 +67,9 @@ pub fn simulate(
     let mut exit_price = bars[last].close;
     let mut exited = bars[last].t;
 
+    // Indexing by the absolute bar number, not iterating a slice: the loop has
+    // to recognise the deadline bar and record the stamp it exits on.
+    #[allow(clippy::needless_range_loop)]
     for i in entry_index + 1..=deadline {
         let bar = &bars[i];
         let (hit_stop, hit_target) = match candidate.side {
@@ -126,14 +129,12 @@ pub struct DecisionRecord {
 impl DecisionRecord {
     /// How much the gate changed this trade's P&L.
     pub fn pnl_delta(&self) -> f64 {
-        self.gated.map(|f| f.pnl).unwrap_or(0.0)
-            - self.ungated.map(|f| f.pnl).unwrap_or(0.0)
+        self.gated.map(|f| f.pnl).unwrap_or(0.0) - self.ungated.map(|f| f.pnl).unwrap_or(0.0)
     }
 
     /// Whether the gate changed what happened at all.
     pub fn intervened(&self) -> bool {
-        self.judgment.gate.action != Action::Execute
-            || self.judgment.gate.size_factor < 1.0
+        self.judgment.gate.action != Action::Execute || self.judgment.gate.size_factor < 1.0
     }
 
     /// Whether the classifier agreed with the generator.

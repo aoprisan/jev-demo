@@ -3,9 +3,7 @@
 mod common;
 
 use common::{choice, noul, score_at, Recorder, TestInput};
-use jev_core::{
-    CheckSpec, ClassifySpec, GateSpec, Jev, Label, Pipeline, ScoreSpec, Verdict,
-};
+use jev_core::{CheckSpec, ClassifySpec, GateSpec, Jev, Label, Pipeline, ScoreSpec, Verdict};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -189,17 +187,14 @@ async fn a_direct_call_and_a_first_stage_call_have_the_same_state_shape() {
     let input = TestInput::new(json!({ "pair": "EURUSD" }));
 
     let _: ClassifyOut<Regime> =
-        Classify::<_, Regime>::classify(&jev, &input, &ClassifySpec::new("s", "q?"))
-            .await
-            .unwrap();
+        Classify::<_, Regime>::classify(&jev, &input, &ClassifySpec::new("s", "q?")).await.unwrap();
     let mut p = Pipeline::new(&jev, "fx");
     let _: ClassifyOut<Regime> =
         p.classify("regime", &input, &ClassifySpec::new("s", "q?")).await.unwrap();
 
     let states = recorder.states();
-    let keys = |v: &serde_json::Value| -> Vec<String> {
-        v.as_object().unwrap().keys().cloned().collect()
-    };
+    let keys =
+        |v: &serde_json::Value| -> Vec<String> { v.as_object().unwrap().keys().cloned().collect() };
     assert_eq!(keys(&states[0]), keys(&states[1]));
     assert_eq!(states[0], states[1]);
 }

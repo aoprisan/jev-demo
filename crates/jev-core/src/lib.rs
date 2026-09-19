@@ -67,10 +67,7 @@ use std::sync::Arc;
 ///
 /// `--mock` is the only switch in the demo; this is where it lands.
 pub fn connect(mock: bool, audit: Arc<Audit>) -> Result<Jev> {
-    let client: Arc<dyn JevClient> = if mock {
-        Arc::new(MockJev::new())
-    } else {
-        Arc::new(LiveJev::from_env()?)
-    };
+    let client: Arc<dyn JevClient> =
+        if mock { Arc::new(MockJev::new()) } else { Arc::new(LiveJev::from_env()?) };
     Ok(Jev::with_audit(client, audit))
 }

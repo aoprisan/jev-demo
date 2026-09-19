@@ -69,9 +69,6 @@ impl Audit {
     /// Total tokens and total latency across every call.
     pub fn totals(&self) -> (u64, u64) {
         let inner = self.inner.lock().expect("audit mutex poisoned");
-        inner
-            .records
-            .iter()
-            .fold((0, 0), |(t, l), r| (t + r.tokens(), l + r.latency_ms))
+        inner.records.iter().fold((0, 0), |(t, l), r| (t + r.tokens(), l + r.latency_ms))
     }
 }

@@ -92,9 +92,7 @@ impl FxSession {
             let values: Vec<f64> = self
                 .decisions
                 .iter()
-                .filter(|d| {
-                    d.judgment.checks.get(name).is_some_and(|c| !c.ok == failed)
-                })
+                .filter(|d| d.judgment.checks.get(name).is_some_and(|c| c.ok != failed))
                 .filter_map(|d| d.ungated.map(|f| f.pnl_bps))
                 .collect();
             let n = values.len();
@@ -277,23 +275,13 @@ pub fn build_input(
     params: &StrategyParams,
     book: &[synth::Exposure],
 ) -> FxDecisionInput {
-    let headlines: Vec<String> = world
-        .headlines_on(candidate.t.day)
-        .iter()
-        .map(|h| h.text.clone())
-        .collect();
+    let headlines: Vec<String> =
+        world.headlines_on(candidate.t.day).iter().map(|h| h.text.clone()).collect();
     let informative =
         world.headlines_on(candidate.t.day).iter().filter(|h| h.informative).count() as u32;
 
     FxDecisionInput {
-        features: FxFeatures::compute(
-            candidate,
-            bars,
-            &world.calendar,
-            book,
-            informative,
-            params,
-        ),
+        features: FxFeatures::compute(candidate, bars, &world.calendar, book, informative, params),
         candidate: CandidateView::of(candidate, world.start),
         headlines,
     }

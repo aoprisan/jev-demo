@@ -5,8 +5,8 @@ mod common;
 use common::TestInput;
 use jev_core::mock::thresholds;
 use jev_core::{
-    Action, Audience, Check, CheckSpec, Classify, ClassifySpec, Explain, ExplainSpec, Gate,
-    GateSpec, Jev, Label, MockJev, Pipeline, Rank, RankSpec, Score, ScoreSpec,
+    Action, Audience, Check, CheckSpec, ClassifySpec, Explain, ExplainSpec, Gate, GateSpec, Jev,
+    Label, MockJev, Pipeline, Rank, RankSpec, Score, ScoreSpec,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -137,9 +137,7 @@ async fn a_tight_stop_alone_reduces_rather_than_holding() {
 #[tokio::test]
 async fn the_event_is_what_turns_a_reduce_into_a_hold() {
     // The same tight stop, judged with and without an imminent release.
-    let tight_stop = |hours: f64| {
-        json!({ "hours_to_event": hours, "next_event_kind": "CPI", "stop_atr_multiple": 0.8 })
-    };
+    let tight_stop = |hours: f64| json!({ "hours_to_event": hours, "next_event_kind": "CPI", "stop_atr_multiple": 0.8 });
     let judge = |features: serde_json::Value| async move {
         let jev = mock();
         let mut p = Pipeline::new(&jev, "fx");
@@ -335,23 +333,17 @@ async fn battery_margin_is_implausible_beyond_two_sigma_of_intraday_deviation() 
     .unwrap();
     assert!(!wild.get("margin_plausible").unwrap().ok);
 
-    let calm = Check::check(
-        &mock(),
-        &input(json!({ "id_deviation_sigmas": 1.0 })),
-        &battery_checks(),
-    )
-    .await
-    .unwrap();
+    let calm =
+        Check::check(&mock(), &input(json!({ "id_deviation_sigmas": 1.0 })), &battery_checks())
+            .await
+            .unwrap();
     assert!(calm.get("margin_plausible").unwrap().ok);
 
     // The rule is on the magnitude, so a large negative deviation fails too.
-    let negative = Check::check(
-        &mock(),
-        &input(json!({ "id_deviation_sigmas": -3.0 })),
-        &battery_checks(),
-    )
-    .await
-    .unwrap();
+    let negative =
+        Check::check(&mock(), &input(json!({ "id_deviation_sigmas": -3.0 })), &battery_checks())
+            .await
+            .unwrap();
     assert!(!negative.get("margin_plausible").unwrap().ok);
 }
 

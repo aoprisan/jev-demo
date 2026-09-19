@@ -134,8 +134,7 @@ impl<I: JevInput> Check<I> for Jev {
         for item in &spec.items {
             asks = asks.with(
                 item.name.clone(),
-                Ask::noul(item.claim.clone())
-                    .criteria(item.when_ok.clone(), item.when_not.clone()),
+                Ask::noul(item.claim.clone()).criteria(item.when_ok.clone(), item.when_not.clone()),
             );
         }
 

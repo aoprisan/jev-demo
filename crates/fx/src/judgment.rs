@@ -247,8 +247,7 @@ pub async fn judge(
     input: &FxDecisionInput,
     candidate: &TradeCandidate,
 ) -> Result<FxJudgment> {
-    let regime: ClassifyOut<FxRegime> =
-        pipeline.classify("regime", input, &regime_spec()).await?;
+    let regime: ClassifyOut<FxRegime> = pipeline.classify("regime", input, &regime_spec()).await?;
     let checks = pipeline.check("sanity", input, &sanity_spec()).await?;
     let risk = pipeline.score("risk", input, &risk_spec()).await?;
     let gate = pipeline.gate("gate", input, &gate_spec(candidate)).await?;

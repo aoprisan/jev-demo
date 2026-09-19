@@ -142,8 +142,7 @@ impl Schedule {
     /// charge is checked at the start of every covered hour and at the end of
     /// the last one.
     pub fn dips_below(&self, window: &AfrrWindow, floor: f64) -> bool {
-        (window.from_hour..=window.to_hour)
-            .any(|h| self.soc_mwh[h as usize] < floor - 1e-9)
+        (window.from_hour..=window.to_hour).any(|h| self.soc_mwh[h as usize] < floor - 1e-9)
             || self.soc_mwh[(window.to_hour + 1) as usize] < floor - 1e-9
     }
 
@@ -233,8 +232,8 @@ pub fn solve(
 
     // Wear costs the asset's rate, weighted by how honestly this variant
     // prices it. One equivalent cycle is twice the capacity in throughput.
-    let wear_per_mwh = asset.degradation_cost_per_cycle * kind.degradation_weight()
-        / (2.0 * asset.capacity_mwh);
+    let wear_per_mwh =
+        asset.degradation_cost_per_cycle * kind.degradation_weight() / (2.0 * asset.capacity_mwh);
 
     // Leftover energy is worth the day's mean price, so the plan does not
     // simply dump the battery into the last hour.
@@ -245,6 +244,9 @@ pub fn solve(
     let mut value = vec![vec![NEG; nodes]; 25];
     let mut action = vec![vec![0i64; nodes]; 24];
 
+    // The node index addresses several parallel grids at once (`value`,
+    // `action`, and the energy it stands for), so it cannot become an iterator.
+    #[allow(clippy::needless_range_loop)]
     for node in 0..nodes {
         let e = energy(node);
         value[24][node] = if e >= floor_at(24) - 1e-9 && e <= ceiling + 1e-9 {
@@ -344,10 +346,6 @@ pub fn solve(
 }
 
 /// Solve all three variants for one day.
-pub fn candidates(
-    prices: &[f64],
-    asset: &BatterySpec,
-    afrr: Option<&AfrrWindow>,
-) -> Vec<Schedule> {
+pub fn candidates(prices: &[f64], asset: &BatterySpec, afrr: Option<&AfrrWindow>) -> Vec<Schedule> {
     ScheduleKind::ALL.iter().map(|k| solve(*k, prices, asset, afrr)).collect()
 }

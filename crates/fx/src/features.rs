@@ -96,7 +96,8 @@ impl FxFeatures {
                 .map(|j| bars[j].high - bars[j].low),
         );
 
-        let sd = crate::strategy::stdev(bars, i, p.period).unwrap_or(f64::EPSILON).max(f64::EPSILON);
+        let sd =
+            crate::strategy::stdev(bars, i, p.period).unwrap_or(f64::EPSILON).max(f64::EPSILON);
         let mid = crate::strategy::sma(bars, i, p.period).unwrap_or(candidate.price);
         let band_excursion = ((candidate.price - mid).abs() / sd - p.k).max(0.0);
 
@@ -170,8 +171,7 @@ impl Exposures {
     fn of(candidate: &TradeCandidate, book: &[Exposure]) -> Self {
         let added = added_currency(candidate.pair, candidate.side);
         let gross: f64 = book.iter().map(|e| e.units.abs()).sum::<f64>().max(f64::EPSILON);
-        let held: f64 =
-            book.iter().filter(|e| e.currency == added).map(|e| e.units.abs()).sum();
+        let held: f64 = book.iter().filter(|e| e.currency == added).map(|e| e.units.abs()).sum();
         let post_units = held + candidate.size_units;
         Self {
             pre_units: held,

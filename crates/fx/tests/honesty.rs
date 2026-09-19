@@ -26,11 +26,7 @@ async fn no_state_ever_sent_to_a_backend_carries_the_generators_regime() {
     for record in &records {
         let state = serde_json::to_string(&record.state).unwrap();
         for key in FORBIDDEN_KEYS {
-            assert!(
-                !state.contains(key),
-                "`{key}` reached a {} call:\n{state}",
-                record.primitive
-            );
+            assert!(!state.contains(key), "`{key}` reached a {} call:\n{state}", record.primitive);
         }
     }
 }

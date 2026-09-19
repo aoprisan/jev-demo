@@ -52,12 +52,7 @@ impl Execution {
 /// Scaling the power scales every energy movement, so the state-of-charge
 /// trajectory stays inside the bounds the solver respected — a schedule run
 /// smaller is always at least as feasible as the schedule run whole.
-pub fn execute(
-    world: &BatteryWorld,
-    day: u32,
-    schedule: &Schedule,
-    size_factor: f64,
-) -> Execution {
+pub fn execute(world: &BatteryWorld, day: u32, schedule: &Schedule, size_factor: f64) -> Execution {
     let asset = &world.asset;
     let efficiency = asset.one_way_efficiency();
     let factor = size_factor.clamp(0.0, 1.0);

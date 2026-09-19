@@ -1,6 +1,6 @@
 //! The battery pipeline end to end, against the mock backend.
 
-use battery::{run_session, judge_day, with_grid_notice, without_grid_notices, ScheduleKind};
+use battery::{judge_day, run_session, with_grid_notice, without_grid_notices, ScheduleKind};
 use jev_core::{Action, Audit, Jev, MockJev};
 use std::sync::Arc;
 use synth::{BatteryWorld, DEFAULT_SEED};
@@ -19,12 +19,10 @@ async fn the_stages_run_in_the_order_the_brief_names() {
     let jev = Jev::with_audit(Arc::new(MockJev::new()), audit.clone());
     judge_day(&jev, &world(20), 14).await.unwrap();
 
-    let stages: Vec<String> =
-        audit.records().iter().map(|r| r.stage.clone().unwrap()).collect();
+    let stages: Vec<String> = audit.records().iter().map(|r| r.stage.clone().unwrap()).collect();
     assert_eq!(stages, vec!["regime", "rank", "sanity", "risk", "gate"]);
 
-    let primitives: Vec<&str> =
-        audit.records().iter().map(|r| r.primitive.as_str()).collect();
+    let primitives: Vec<&str> = audit.records().iter().map(|r| r.primitive.as_str()).collect();
     assert_eq!(primitives, vec!["classify", "rank", "check", "score", "gate"]);
 }
 
@@ -40,10 +38,7 @@ async fn the_checks_judge_the_schedule_the_ranking_chose() {
 
     let records = audit.records();
     let under = |i: usize| -> String {
-        records[i].state["input"]["features"]["under_consideration"]
-            .as_str()
-            .unwrap()
-            .to_owned()
+        records[i].state["input"]["features"]["under_consideration"].as_str().unwrap().to_owned()
     };
     assert_eq!(under(0), "balanced", "the ranking is asked about the default day");
     assert_eq!(under(1), "balanced");
@@ -67,16 +62,13 @@ async fn adding_a_grid_notice_over_the_discharge_block_flips_the_ranking() {
     // The demo's counterfactual: identical prices, one note added.
     let w = world(40);
     let day = (0..40)
-        .find(|d| {
-            w.afrr_on(*d).is_none() && w.grid_notes_on(*d).is_empty()
-        })
+        .find(|d| w.afrr_on(*d).is_none() && w.grid_notes_on(*d).is_empty())
         .expect("a quiet day");
 
     let quiet = judge_day(&mock_jev(), &without_grid_notices(&w, day), day).await.unwrap();
     let block = quiet.chosen().discharge_block().expect("the plan discharges");
-    let noticed = judge_day(&mock_jev(), &with_grid_notice(&w, day, block.0, block.1), day)
-        .await
-        .unwrap();
+    let noticed =
+        judge_day(&mock_jev(), &with_grid_notice(&w, day, block.0, block.1), day).await.unwrap();
 
     assert_eq!(quiet.judgment.chosen, ScheduleKind::Balanced);
     assert_eq!(
@@ -92,11 +84,8 @@ async fn adding_a_grid_notice_over_the_discharge_block_flips_the_ranking() {
 async fn an_implausible_margin_escalates_rather_than_resizing() {
     let jev = mock_jev();
     let session = run_session(&jev, &world(60), None).await.unwrap();
-    let escalated: Vec<_> = session
-        .days
-        .iter()
-        .filter(|d| d.judgment.gate.action == Action::Escalate)
-        .collect();
+    let escalated: Vec<_> =
+        session.days.iter().filter(|d| d.judgment.gate.action == Action::Escalate).collect();
 
     assert!(!escalated.is_empty(), "60 days should contain at least one escalation");
     for day in escalated {
@@ -139,10 +128,7 @@ async fn the_gated_desk_holds_the_reserve_where_the_solver_only_desk_does_not() 
 async fn a_session_is_deterministic() {
     let a = run_session(&mock_jev(), &world(15), None).await.unwrap();
     let b = run_session(&mock_jev(), &world(15), None).await.unwrap();
-    assert_eq!(
-        serde_json::to_string(&a.days).unwrap(),
-        serde_json::to_string(&b.days).unwrap()
-    );
+    assert_eq!(serde_json::to_string(&a.days).unwrap(), serde_json::to_string(&b.days).unwrap());
 }
 
 #[tokio::test]

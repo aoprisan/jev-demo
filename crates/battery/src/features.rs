@@ -87,16 +87,12 @@ impl BatteryFeatures {
 
         let discharge = schedule.discharge_block();
         let grid_notice_overlaps_discharge = match discharge {
-            Some((from, to)) => {
-                world.grid_notes_on(day).iter().any(|n| n.overlaps(from, to))
-            }
+            Some((from, to)) => world.grid_notes_on(day).iter().any(|n| n.overlaps(from, to)),
             None => false,
         };
 
         let dips = match afrr {
-            Some(window) => {
-                schedule.dips_below(window, window.reserve_soc * asset.capacity_mwh)
-            }
+            Some(window) => schedule.dips_below(window, window.reserve_soc * asset.capacity_mwh),
             None => false,
         };
 

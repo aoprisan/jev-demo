@@ -196,7 +196,9 @@ impl Verdict {
     /// The weighted score, level count and confidence, if this is a score.
     pub fn as_score(&self) -> Option<(f64, usize, f64)> {
         match self {
-            Verdict::Score { score, levels, confidence, .. } => Some((*score, *levels, *confidence)),
+            Verdict::Score { score, levels, confidence, .. } => {
+                Some((*score, *levels, *confidence))
+            }
             _ => None,
         }
     }

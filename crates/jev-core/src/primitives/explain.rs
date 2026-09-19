@@ -4,7 +4,10 @@
 //! The wording of each of those is the caller's, so the summary cannot assert
 //! anything the log did not already contain.
 
-use super::{at_most_chars, evidence_from, fit, in_range, need_choice, need_noul, need_score, Evidence, JevInput};
+use super::{
+    at_most_chars, evidence_from, fit, in_range, need_choice, need_noul, need_score, Evidence,
+    JevInput,
+};
 use crate::ask::{Ask, Asks};
 use crate::client::Primitive;
 use crate::error::{JevError, Result};
@@ -43,9 +46,7 @@ impl Audience {
     /// What this audience wants from a summary.
     pub fn wants(&self) -> &'static str {
         match self {
-            Audience::Trader => {
-                "what was put on, what was held back, and which condition drove it"
-            }
+            Audience::Trader => "what was put on, what was held back, and which condition drove it",
             Audience::Compliance => {
                 "that the decision was bounded, that the checks ran, and where the record is"
             }
@@ -209,9 +210,7 @@ impl<I: JevInput> Explain<I> for Jev {
             return Err(JevError::InvalidCall("explain needs at least two framings".into()));
         }
         if spec.severity.len() < 2 {
-            return Err(JevError::InvalidCall(
-                "explain needs at least two severity levels".into(),
-            ));
+            return Err(JevError::InvalidCall("explain needs at least two severity levels".into()));
         }
         let audience = spec.audience;
         let mut asks = Asks::new()

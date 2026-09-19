@@ -18,8 +18,7 @@ fn the_realised_margin_is_the_plan_priced_at_intraday() {
     let e = execute(&w, day, &s, 1.0);
 
     // Recompute by hand from the intraday curve: an import costs, an export earns.
-    let expected: f64 =
-        (0..24).map(|h| -s.power_mw[h] * w.intraday_hour(day, h as u32)).sum();
+    let expected: f64 = (0..24).map(|h| -s.power_mw[h] * w.intraday_hour(day, h as u32)).sum();
     assert!((e.energy_margin - expected).abs() < 1e-9, "{} vs {expected}", e.energy_margin);
     assert!(
         (e.realised_margin - (e.energy_margin + e.reserve_payment - e.degradation_cost)).abs()
@@ -32,8 +31,7 @@ fn realised_and_expected_differ_because_intraday_is_not_day_ahead() {
     let w = world();
     let surprises: Vec<f64> = (0..30)
         .map(|day| {
-            let s =
-                solve(ScheduleKind::Balanced, w.day_ahead_for(day), &w.asset, w.afrr_on(day));
+            let s = solve(ScheduleKind::Balanced, w.day_ahead_for(day), &w.asset, w.afrr_on(day));
             execute(&w, day, &s, 1.0).margin_surprise()
         })
         .collect();
@@ -85,8 +83,7 @@ fn holding_the_reserve_earns_the_capacity_payment_and_breaching_it_does_not() {
     let held = execute(&w, day, &heavy, 1.0);
     assert!(held.reserve_held(), "the reserve-heavy plan holds the reserve");
     assert!(
-        (held.reserve_payment
-            - window.reserve_mw * window.capacity_price * window.hours() as f64)
+        (held.reserve_payment - window.reserve_mw * window.capacity_price * window.hours() as f64)
             .abs()
             < EPS
     );
@@ -133,8 +130,7 @@ fn summarise_totals_margin_breaches_and_cycles() {
     let w = world();
     let executions: Vec<Execution> = (0..20)
         .map(|day| {
-            let s =
-                solve(ScheduleKind::Balanced, w.day_ahead_for(day), &w.asset, w.afrr_on(day));
+            let s = solve(ScheduleKind::Balanced, w.day_ahead_for(day), &w.asset, w.afrr_on(day));
             execute(&w, day, &s, 1.0)
         })
         .collect();
@@ -142,10 +138,7 @@ fn summarise_totals_margin_breaches_and_cycles() {
 
     assert_eq!(book.days_run + book.days_stood_down, 20);
     assert!((book.margin - executions.iter().map(|e| e.realised_margin).sum::<f64>()).abs() < 1e-9);
-    assert_eq!(
-        book.reserve_breaches,
-        executions.iter().map(|e| e.reserve_breaches).sum::<u32>()
-    );
+    assert_eq!(book.reserve_breaches, executions.iter().map(|e| e.reserve_breaches).sum::<u32>());
     assert!((book.cycles - executions.iter().map(|e| e.cycles).sum::<f64>()).abs() < 1e-9);
     assert!(book.margin_per_cycle() > 0.0);
 }
@@ -154,7 +147,7 @@ fn summarise_totals_margin_breaches_and_cycles() {
 fn summarise_counts_stand_downs_separately() {
     let w = world();
     let s = solve(ScheduleKind::Balanced, w.day_ahead_for(0), &w.asset, None);
-    let mixed = vec![execute(&w, 0, &s, 1.0), stood_down(1, &s), execute(&w, 2, &s, 0.5)];
+    let mixed = [execute(&w, 0, &s, 1.0), stood_down(1, &s), execute(&w, 2, &s, 0.5)];
     let book = summarise(mixed.iter());
     assert_eq!(book.days_run, 2);
     assert_eq!(book.days_stood_down, 1);

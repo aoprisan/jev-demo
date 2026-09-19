@@ -279,8 +279,7 @@ impl BatteryWorld {
 
     /// The first day with both a reserve window and a grid note.
     pub fn first_contested_day(&self) -> Option<u32> {
-        (0..self.days)
-            .find(|d| self.afrr_on(*d).is_some() && !self.grid_notes_on(*d).is_empty())
+        (0..self.days).find(|d| self.afrr_on(*d).is_some() && !self.grid_notes_on(*d).is_empty())
     }
 }
 

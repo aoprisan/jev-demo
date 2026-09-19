@@ -55,11 +55,7 @@ pub async fn render(
 fn book_rows(ungated: &BookResult, gated: &BookResult) -> Vec<Vec<String>> {
     vec![
         vec!["".into(), "ungated".into(), "gated".into()],
-        vec![
-            "trades".into(),
-            ungated.trades.to_string(),
-            gated.trades.to_string(),
-        ],
+        vec!["trades".into(), ungated.trades.to_string(), gated.trades.to_string()],
         vec!["P&L".into(), signed(ungated.pnl), signed(gated.pnl)],
         vec![
             "return on notional".into(),
@@ -71,16 +67,8 @@ fn book_rows(ungated: &BookResult, gated: &BookResult) -> Vec<Vec<String>> {
             format!("{:.0}%", ungated.hit_rate() * 100.0),
             format!("{:.0}%", gated.hit_rate() * 100.0),
         ],
-        vec![
-            "max drawdown".into(),
-            thousands(ungated.max_drawdown),
-            thousands(gated.max_drawdown),
-        ],
-        vec![
-            "notional deployed".into(),
-            thousands(ungated.notional),
-            thousands(gated.notional),
-        ],
+        vec!["max drawdown".into(), thousands(ungated.max_drawdown), thousands(gated.max_drawdown)],
+        vec!["notional deployed".into(), thousands(ungated.notional), thousands(gated.notional)],
     ]
 }
 
@@ -88,11 +76,7 @@ fn gate_rows(session: &FxSession) -> Vec<Vec<String>> {
     let max = session.gate_distribution().iter().map(|(_, n)| *n).max().unwrap_or(0);
     let mut rows = vec![vec!["action".into(), "count".into(), "".into()]];
     for (action, count) in session.gate_distribution() {
-        rows.push(vec![
-            action.as_str().to_owned(),
-            count.to_string(),
-            bar(count, max, 24),
-        ]);
+        rows.push(vec![action.as_str().to_owned(), count.to_string(), bar(count, max, 24)]);
     }
     rows
 }
@@ -140,21 +124,15 @@ fn scorecard_rows(session: &FxSession) -> Vec<Vec<String>> {
 }
 
 /// The checks this domain runs, in report order.
-const CHECKS: [&str; 3] =
-    ["stop_sane", "signal_valid_in_regime", "correlated_exposure_ok"];
+const CHECKS: [&str; 3] = ["stop_sane", "signal_valid_in_regime", "correlated_exposure_ok"];
 
 fn candidate_rows(session: &FxSession) -> Vec<Vec<String>> {
     let mut rows = vec![vec!["pair".into(), "candidates".into(), "executed".into()]];
     for pair in Pair::ALL {
         let of_pair: Vec<_> =
             session.decisions.iter().filter(|d| d.candidate.pair == pair).collect();
-        let executed =
-            of_pair.iter().filter(|d| d.judgment.gate.action.acts()).count();
-        rows.push(vec![
-            pair.code().to_owned(),
-            of_pair.len().to_string(),
-            executed.to_string(),
-        ]);
+        let executed = of_pair.iter().filter(|d| d.judgment.gate.action.acts()).count();
+        rows.push(vec![pair.code().to_owned(), of_pair.len().to_string(), executed.to_string()]);
     }
     rows
 }
@@ -370,11 +348,7 @@ fn markdown(
 
     s.push_str("\n## Explain\n\n");
     for out in summaries {
-        s.push_str(&format!(
-            "**{}** — {}\n\n",
-            out.for_audience.as_str(),
-            out.summary
-        ));
+        s.push_str(&format!("**{}** — {}\n\n", out.for_audience.as_str(), out.summary));
     }
 
     s.push_str(&format!(

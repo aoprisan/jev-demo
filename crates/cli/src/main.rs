@@ -74,12 +74,16 @@ async fn main() -> Result<()> {
         _ => {}
     }
 
+    // A missing key is a configuration problem, not a fault in the program, so
+    // it exits cleanly rather than unwinding an error with a backtrace.
     if !cli.mock && std::env::var_os("TYPESAFE_API_KEY").is_none() {
-        anyhow::bail!(
-            "no TYPESAFE_API_KEY in the environment.\n\
-             Set one to run against the System One API, or pass --mock to use the \
-             offline rule-based backend (`just demo-fx-mock`, `just demo-all-mock`)."
+        eprintln!(
+            "jev-desk: no TYPESAFE_API_KEY in the environment.\n\n\
+             Set one to run against the System One API, or pass --mock to use the offline\n\
+             rule-based backend:\n\n    \
+             just demo-fx-mock\n    just demo-battery-mock\n    just demo-all-mock\n"
         );
+        std::process::exit(2);
     }
 
     match cli.command {
@@ -170,11 +174,7 @@ async fn run_all(cli: &Cli) -> Result<()> {
             .iter()
             .map(|d| d.judgment.checks.failed().len())
             .sum::<usize>()
-            + battery_session
-                .days
-                .iter()
-                .map(|d| d.judgment.checks.failed().len())
-                .sum::<usize>(),
+            + battery_session.days.iter().map(|d| d.judgment.checks.failed().len()).sum::<usize>(),
         headlines: vec![
             format!(
                 "forex gating took the book from {} to {}; the battery desk missed the \

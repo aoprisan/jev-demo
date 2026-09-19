@@ -24,11 +24,11 @@ mod gate;
 mod rank;
 mod score;
 
-pub use check::{Check, CheckItem, CheckOut, CheckSpec, CheckResult};
+pub use check::{Check, CheckItem, CheckOut, CheckResult, CheckSpec};
 pub use classify::{Classify, ClassifyOut, ClassifySpec, Label};
 pub use explain::{Audience, Explain, ExplainOut, ExplainSpec, FactSpec, Framing};
 pub use gate::{Action, Gate, GateOut, GateSpec};
-pub use rank::{Candidate, CandidateId, Rank, RankOut, Ranked, RankSpec};
+pub use rank::{Candidate, CandidateId, Rank, RankOut, RankSpec, Ranked};
 pub use score::{DriverSpec, Score, ScoreOut, ScoreSpec};
 
 use crate::ask::Verdict;

@@ -168,12 +168,8 @@ fn gate_schema_rejects_an_acting_action_carrying_no_size() {
     // "Reduce to nothing" is not a decision anyone can act on. Rounding it to a
     // hold would be inventing the judgment rather than reporting it.
     for action in [Action::Execute, Action::Reduce] {
-        let bad = GateOut {
-            action,
-            size_factor: 0.0,
-            reason: "x".into(),
-            evidence: Evidence::default(),
-        };
+        let bad =
+            GateOut { action, size_factor: 0.0, reason: "x".into(), evidence: Evidence::default() };
         assert!(
             matches!(bad.validate(), Err(JevError::Contradiction { .. })),
             "{action:?} at zero size should not validate"
@@ -242,13 +238,7 @@ async fn score_maps_the_rubric_to_0_100_and_reports_held_drivers() {
 
 #[tokio::test]
 async fn score_caps_reported_drivers_at_three() {
-    let jev = jev_answering(|name, _| {
-        if name == "level" {
-            score_at(1.0, 3)
-        } else {
-            noul(0.99)
-        }
-    });
+    let jev = jev_answering(|name, _| if name == "level" { score_at(1.0, 3) } else { noul(0.99) });
     let mut spec = ScoreSpec::new("x", "q?", ["a", "b", "c"]);
     for n in ["d1", "d2", "d3", "d4", "d5"] {
         spec = spec.driver(n, "holds");
@@ -260,12 +250,8 @@ async fn score_caps_reported_drivers_at_three() {
 
 #[test]
 fn score_schema_rejects_an_out_of_range_score() {
-    let bad = ScoreOut {
-        score: 101,
-        drivers: vec![],
-        reason: "x".into(),
-        evidence: Evidence::default(),
-    };
+    let bad =
+        ScoreOut { score: 101, drivers: vec![], reason: "x".into(), evidence: Evidence::default() };
     assert!(matches!(bad.validate(), Err(JevError::OutOfRange { field: "score", .. })));
 }
 

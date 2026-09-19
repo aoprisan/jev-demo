@@ -13,8 +13,7 @@ pub async fn render(
     world: &BatteryWorld,
     session: &BatterySession,
 ) -> Result<DomainReport> {
-    let failed_checks: usize =
-        session.days.iter().map(|d| d.judgment.checks.failed().len()).sum();
+    let failed_checks: usize = session.days.iter().map(|d| d.judgment.checks.failed().len()).sum();
     let counts = Counts {
         domain: "battery",
         decisions: session.days.len(),
@@ -25,16 +24,11 @@ pub async fn render(
         headlines: vec![
             format!(
                 "the reserve was missed {} times against {} without the judgment layer",
-                session.gated.reserve_breaches,
-                session.solver_only.reserve_breaches,
+                session.gated.reserve_breaches, session.solver_only.reserve_breaches,
             ),
             format!(
                 "the ranking moved {} of {} days off the default schedule",
-                session
-                    .days
-                    .iter()
-                    .filter(|d| d.judgment.chosen != ScheduleKind::Balanced)
-                    .count(),
+                session.days.iter().filter(|d| d.judgment.chosen != ScheduleKind::Balanced).count(),
                 session.days.len()
             ),
         ],
@@ -55,21 +49,13 @@ pub async fn render(
 fn book_rows(solver_only: &BookResult, gated: &BookResult) -> Vec<Vec<String>> {
     vec![
         vec!["".into(), "solver-only".into(), "gated".into()],
-        vec![
-            "days run".into(),
-            solver_only.days_run.to_string(),
-            gated.days_run.to_string(),
-        ],
+        vec!["days run".into(), solver_only.days_run.to_string(), gated.days_run.to_string()],
         vec![
             "days stood down".into(),
             solver_only.days_stood_down.to_string(),
             gated.days_stood_down.to_string(),
         ],
-        vec![
-            "realised margin".into(),
-            signed(solver_only.margin),
-            signed(gated.margin),
-        ],
+        vec!["realised margin".into(), signed(solver_only.margin), signed(gated.margin)],
         vec![
             "reserve payments".into(),
             thousands(solver_only.reserve_payment),

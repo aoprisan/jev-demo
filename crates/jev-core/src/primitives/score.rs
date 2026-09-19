@@ -1,7 +1,9 @@
 //! `Score<I>` — rate the state 0..=100 on a caller-supplied rubric, and say which
 //! of a caller-supplied vocabulary of drivers actually hold.
 
-use super::{at_most_chars, at_most_items, fit, in_range, need_noul, need_score, Evidence, JevInput, Weight};
+use super::{
+    at_most_chars, at_most_items, fit, in_range, need_noul, need_score, Evidence, JevInput, Weight,
+};
 use crate::ask::{Ask, Asks};
 use crate::client::Primitive;
 use crate::error::{JevError, Result};
@@ -142,8 +144,7 @@ impl<I: JevInput> Score<I> for Jev {
         } else {
             format!("driven by {}", drivers.join(", "))
         };
-        let reason =
-            fit(&format!("{} scores {}/100 — {}", spec.subject, score, tail), MAX_REASON);
+        let reason = fit(&format!("{} scores {}/100 — {}", spec.subject, score, tail), MAX_REASON);
 
         let out = ScoreOut {
             score,

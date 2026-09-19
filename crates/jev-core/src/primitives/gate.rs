@@ -165,9 +165,7 @@ pub trait Gate<I: JevInput> {
 impl<I: JevInput> Gate<I> for Jev {
     async fn gate(&self, input: &I, spec: &GateSpec) -> Result<GateOut> {
         if spec.size_levels.len() < 2 {
-            return Err(JevError::InvalidCall(
-                "gate size rubric needs at least two levels".into(),
-            ));
+            return Err(JevError::InvalidCall("gate size rubric needs at least two levels".into()));
         }
         let asks = Asks::new()
             .with(

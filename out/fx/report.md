@@ -60,24 +60,24 @@ Each named check held up against what actually happened. The outcomes are the **
 
 | when | pair | side | action | size | P&L effect | reason |
 | --- | --: | --: | --: | --: | --: | --: |
-| d078 08:00 | GBP/USD | long | reduce | 25% | -1,970 | GBP/USD long: reduce at 25% of size — signal_valid_in_regime failed (conf 0.45, next hold 0.31) |
-| d078 04:00 | GBP/USD | long | reduce | 25% | -1,818 | GBP/USD long: reduce at 25% of size — signal_valid_in_regime failed (conf 0.45, next hold 0.31) |
-| d036 12:00 | GBP/USD | long | hold | 0% | -1,664 | GBP/USD long: hold at 0% of size — risk 92, imminent_event (conf 0.45, next reduce 0.31) |
-| d076 04:00 | USD/JPY | long | reduce | 25% | -1,599 | USD/JPY long: reduce at 25% of size — signal_valid_in_regime failed (conf 0.45, next hold 0.31) |
-| d078 00:00 | GBP/USD | long | reduce | 25% | -1,590 | GBP/USD long: reduce at 25% of size — signal_valid_in_regime failed (conf 0.45, next hold 0.31) |
-| d044 04:00 | GBP/USD | short | reduce | 25% | -1,472 | GBP/USD short: reduce at 25% of size — signal_valid_in_regime failed (conf 0.45, next hold 0.31) |
-| d040 20:00 | EUR/USD | short | reduce | 25% | -1,466 | EUR/USD short: reduce at 25% of size — signal_valid_in_regime failed (conf 0.45, next hold 0.31) |
-| d044 00:00 | GBP/USD | short | reduce | 25% | -1,332 | GBP/USD short: reduce at 25% of size — signal_valid_in_regime failed (conf 0.45, next hold 0.31) |
-| d076 00:00 | USD/JPY | long | reduce | 25% | -1,327 | USD/JPY long: reduce at 25% of size — signal_valid_in_regime failed (conf 0.45, next hold 0.31) |
-| d067 04:00 | EUR/USD | long | reduce | 25% | -1,313 | EUR/USD long: reduce at 25% of size — signal_valid_in_regime failed (conf 0.45, next hold 0.31) |
+| d078 08:00 | GBP/USD | long | reduce | 25% | -1,970 | GBP/USD long: reduce at 25% of size — signal_valid_in_regime failed (p=0.57, conf 0.45; next hold 0.31) |
+| d078 04:00 | GBP/USD | long | reduce | 25% | -1,818 | GBP/USD long: reduce at 25% of size — signal_valid_in_regime failed (p=0.57, conf 0.45; next hold 0.31) |
+| d036 12:00 | GBP/USD | long | hold | 0% | -1,664 | GBP/USD long: hold at 0% of size — risk 92, imminent_event (p=0.57, conf 0.45; next reduce 0.31) |
+| d076 04:00 | USD/JPY | long | reduce | 25% | -1,599 | USD/JPY long: reduce at 25% of size — signal_valid_in_regime failed (p=0.57, conf 0.45; next hold 0.31) |
+| d078 00:00 | GBP/USD | long | reduce | 25% | -1,590 | GBP/USD long: reduce at 25% of size — signal_valid_in_regime failed (p=0.57, conf 0.45; next hold 0.31) |
+| d044 04:00 | GBP/USD | short | reduce | 25% | -1,472 | GBP/USD short: reduce at 25% of size — signal_valid_in_regime failed (p=0.57, conf 0.45; next hold 0.31) |
+| d040 20:00 | EUR/USD | short | reduce | 25% | -1,466 | EUR/USD short: reduce at 25% of size — signal_valid_in_regime failed (p=0.57, conf 0.45; next hold 0.31) |
+| d044 00:00 | GBP/USD | short | reduce | 25% | -1,332 | GBP/USD short: reduce at 25% of size — signal_valid_in_regime failed (p=0.57, conf 0.45; next hold 0.31) |
+| d076 00:00 | USD/JPY | long | reduce | 25% | -1,327 | USD/JPY long: reduce at 25% of size — signal_valid_in_regime failed (p=0.57, conf 0.45; next hold 0.31) |
+| d067 04:00 | EUR/USD | long | reduce | 25% | -1,313 | EUR/USD long: reduce at 25% of size — signal_valid_in_regime failed (p=0.57, conf 0.45; next hold 0.31) |
 
 ## Explain
 
 **trader** — the forex session — the judgment layer changed 129 of 214 decisions without needing a human. The session was notable. Gating moved the book from +35,620 to +13,065, at 9.7 against 16.6 bp of return; 129 of 214 were held or sized down, and the hit rate went from 49% to 48% on 9 fewer trades.
 
-**compliance** — the forex session — the judgment layer changed 129 of 214 decisions without needing a human. The session was notable. 129 of 214 were held or sized down; the same named checks ran on every one, 136 failing; all 856 typed calls are in decisions.jsonl, and the hit rate went from 49% to 48% on 9 fewer…
+**compliance** — the forex session — the judgment layer changed 129 of 214 decisions without needing a human. The session was notable. 129 of 214 were held or sized down; the same named checks ran on every one, 136 failing, and all 856 typed calls are in decisions.jsonl.
 
 
 ---
 
-858 typed calls, 718,065 tokens, backend `mock`. Every call and its output is in `decisions.jsonl`.
+858 typed calls, 721,917 tokens, backend `mock`. Every call and its output is in `decisions.jsonl`.
