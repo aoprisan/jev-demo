@@ -668,6 +668,27 @@ pre {
   padding: 10px 12px;
 }
 
+/* Highlighted JSON: the punctuation is the base colour, the tokens are lit. */
+pre.json {
+  color: var(--dim);
+}
+
+pre.json .j-key {
+  color: var(--accent);
+}
+
+pre.json .j-str {
+  color: var(--text);
+}
+
+pre.json .j-num {
+  color: var(--info);
+}
+
+pre.json .j-lit {
+  color: var(--warn);
+}
+
 .checklist {
   display: grid;
   gap: 6px;

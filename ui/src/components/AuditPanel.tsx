@@ -11,6 +11,7 @@ import { useState } from "react";
 import { decisionsUrl, getCall, getCallRequest, getCalls } from "../api/client";
 import { clock, ms, num } from "../format";
 import { useFetch } from "../hooks/useApi";
+import { Json } from "./json";
 import { Banner, Card, Drawer, Empty } from "./ui";
 
 const PAGE = 100;
@@ -141,7 +142,7 @@ function CallDrawer({
             {request.error && <Banner kind="bad">{request.error}</Banner>}
             {request.data && (
               <div className="scroll-box">
-                <pre>{JSON.stringify(request.data.body, null, 2)}</pre>
+                <Json value={request.data.body} />
               </div>
             )}
           </Card>
