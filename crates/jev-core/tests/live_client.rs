@@ -106,17 +106,25 @@ async fn a_choice_and_a_score_reach_the_wire_in_the_shape_the_api_expects() {
 
     let body = sent(&server).await;
 
-    // The state carries the primitive's instructions, the domain context block
-    // and the decision state, so a live model sees everything the mock does.
+    // The state is content only: the domain framing under `context`, the
+    // decision state under `input`, earlier judgments under `prior_judgments`.
+    // No instructions travel in it.
     let state = &body["state"];
-    assert!(state["instructions"].as_str().unwrap().contains("Gate"));
+    let keys: Vec<&str> = state.as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(keys, vec!["context", "input", "prior_judgments"]);
     assert_eq!(state["context"], json!("test domain"));
-    assert_eq!(state["state"]["input"]["features"]["hours_to_event"], json!(2.0));
-    assert!(state["state"]["prior_judgments"].is_array());
+    assert_eq!(state["input"]["features"]["hours_to_event"], json!(2.0));
+    assert!(state["prior_judgments"].is_array());
+    assert_eq!(body["model"], json!("jev-latest"));
 
-    // The action is a choice offering exactly the four actions, described.
+    // The action is a choice offering exactly the four actions, described, and
+    // its instructions are a structured object: the question plus the gate's
+    // standing guidance as named fields.
     let action = &body["questions"]["action"];
     assert_eq!(action["type"], json!("choice"));
+    assert_eq!(action["instructions"]["question"], json!("Go?"));
+    assert!(action["instructions"]["what"].as_str().unwrap().contains("last judgment"));
+    assert!(action["instructions"]["not_for"].is_string());
     let options = action["criteria"].as_object().unwrap();
     assert_eq!(options.len(), 4);
     for name in ["execute", "reduce", "hold", "escalate"] {
@@ -156,7 +164,8 @@ async fn nouls_carry_their_yes_and_no_criteria() {
     let body = sent(&server).await;
     let question = &body["questions"]["stop_sane"];
     assert_eq!(question["type"], json!("noul"));
-    assert_eq!(question["instructions"], json!("The stop is sane."));
+    assert_eq!(question["instructions"]["question"], json!("The stop is sane."));
+    assert!(question["instructions"]["what"].is_string());
     assert_eq!(question["criteria"]["true"], json!("wide enough"));
     assert_eq!(question["criteria"]["false"], json!("too tight"));
 }
@@ -208,7 +217,7 @@ async fn a_score_maps_onto_the_rubric_we_sent_not_the_legend_that_came_back() {
                     "type": "score",
                     "score": 1.5,
                     "legend": { "0": "a", "1": "b" },
-                    "probabilities": { "0": 0.5, "1": 0.5 },
+                    "probabilities": { "0": 0.0, "1": 0.5, "2": 0.5, "3": 0.0, "4": 0.0 },
                     "confidence": 0.5
                 }
             }

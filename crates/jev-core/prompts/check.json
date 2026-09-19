@@ -1,0 +1,7 @@
+{
+  "claim": {
+    "what": "A plausibility claim about the solver's result: the kind of thing a careful colleague glances at before letting an action through. Judge whether the claim holds given everything in `state.input`.",
+    "not_for": "Recomputing the solver's arithmetic, or deciding whether the action proceeds; a later gate does that.",
+    "when_unknowable": "A claim the state gives no evidence for is not true by default. Answer at the probability the evidence supports."
+  }
+}

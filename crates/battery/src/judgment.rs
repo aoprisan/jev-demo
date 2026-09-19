@@ -1,15 +1,16 @@
-//! The battery judgment pipeline:
-//! `Classify(regime) -> Rank(schedules) -> Check(sanity) -> Score(risk) -> Gate`.
+//! The battery judgment pipeline, in three calls:
+//! `[Classify(regime), Rank(schedules)] -> [Check(sanity), Score(risk)] -> Gate`.
 //!
 //! The ranking is the stage that distinguishes this domain from the forex one.
-//! The solver produces three complete, valid schedules and Jev orders them; the
-//! later stages then judge the one that came first.
+//! The solver produces three complete, valid schedules and Jev rates them; the
+//! later stages then judge the one that came first, which is why they cannot
+//! share the first call: the state they read is rebuilt around the winner.
 
 use crate::features::{afrr_line, note_line, BatteryFeatures};
 use crate::solver::{Schedule, ScheduleKind};
 use jev_core::{
     Candidate, CheckOut, CheckSpec, ClassifyOut, ClassifySpec, GateOut, GateSpec, JevInput, Label,
-    Pipeline, RankOut, RankSpec, Result, ScoreOut, ScoreSpec,
+    Pipeline, RankOut, RankSpec, Result, ReviewPolicy, ScoreOut, ScoreSpec,
 };
 use serde::{Deserialize, Serialize};
 use synth::BatteryWorld;
@@ -81,7 +82,8 @@ pub struct BatteryDayInput {
     pub afrr: Option<String>,
     /// Notes from the grid operator.
     pub grid_notes: Vec<String>,
-    /// Today's headlines, mostly noise.
+    /// Today's headlines, as printed. Most are noise; the model is the one to
+    /// tell which.
     pub headlines: Vec<String>,
 }
 
@@ -131,41 +133,18 @@ fn round(v: f64, places: u32) -> f64 {
 }
 
 impl JevInput for BatteryDayInput {
+    /// Only what the fields do not already say: what the asset is, which solver
+    /// built the schedules, and that their energy is final. The conditions, the
+    /// obligation and the grid notes are fields of the input.
     fn context_block(&self) -> String {
-        let f = &self.features;
-        let mut s = format!(
-            "Domain: a 1 MW / 2 MWh grid battery trading day-ahead arbitrage. A \
-             deterministic solver has produced three complete, valid schedules for {} \
-             ({}). All three respect the state-of-charge bounds; they differ in how much \
-             headroom they keep and how hard they cycle.\n\
-             Conditions: day-ahead spread {:.0} per MWh, peaking at {:.0}. Dispersion at \
-             the {:.0}th percentile of the last ten days. Intraday settled {:+.1} sigma \
-             from its curve yesterday. {} negative-price hour(s).\n",
-            f.date,
-            f.day,
-            f.day_ahead_spread,
-            f.peak_price,
-            f.volatility_percentile * 100.0,
-            f.id_deviation_sigmas,
-            f.negative_price_hours,
-        );
-        match &self.afrr {
-            Some(line) => s.push_str(&format!("Reserve obligation: {line}\n")),
-            None => s.push_str("No reserve obligation today.\n"),
-        }
-        if self.grid_notes.is_empty() {
-            s.push_str("No notes from the grid operator.\n");
-        } else {
-            s.push_str("Grid operator:\n");
-            for note in &self.grid_notes {
-                s.push_str(&format!("- {note}\n"));
-            }
-        }
-        s.push_str(
-            "The solver owns the energy in every schedule. You are judging which one \
-             suits today, and whether it should run.",
-        );
-        s
+        format!(
+            "A 1 MW / 2 MWh grid battery trading day-ahead arbitrage. `candidates` are three \
+             complete, valid schedules for {} built by a deterministic solver; all respect the \
+             state-of-charge bounds and differ in headroom and cycling, and the energy in each \
+             is final. `features` describes the day and the `{}` schedule; `afrr` is today's \
+             reserve obligation and `grid_notes` what the operator said.",
+            self.features.date, self.features.under_consideration,
+        )
     }
 }
 
@@ -184,7 +163,14 @@ pub struct BatteryJudgment {
     pub risk: ScoreOut,
     /// The gate, on the chosen schedule.
     pub gate: GateOut,
+    /// Why a person should look at this day, when the certainty behind it was
+    /// thin. Set by [`REVIEW`] in code; it never changes the gate.
+    pub review: Option<String>,
 }
+
+/// When a battery day is flagged for review.
+pub const REVIEW: ReviewPolicy =
+    ReviewPolicy { min_classify_confidence: 0.10, undecided_check_band: (0.4, 0.6) };
 
 /// The classify stage.
 pub fn regime_spec() -> ClassifySpec {
@@ -195,13 +181,13 @@ pub fn regime_spec() -> ClassifySpec {
     )
 }
 
-/// The rank stage.
+/// The rank stage: one fit rating per schedule, ordered in code.
 pub fn rank_spec(candidates: &[Schedule], views: &[ScheduleView]) -> RankSpec<ScheduleKind> {
     RankSpec::new(
         "today's schedules",
-        "Order these schedules by how well they suit today's conditions, best first. \
-         All three are valid and the energy in each is fixed; you are choosing which \
-         set of trade-offs today deserves.",
+        "How well does this schedule suit today's conditions? It is one of the three in \
+         `candidates`; all are valid and the energy in each is fixed. Rate the trade-offs \
+         it makes against the day.",
         candidates
             .iter()
             .zip(views)
@@ -211,13 +197,21 @@ pub fn rank_spec(candidates: &[Schedule], views: &[ScheduleView]) -> RankSpec<Sc
 }
 
 /// The three sanity checks, exactly as the brief names them.
-pub fn sanity_spec(chosen: ScheduleKind) -> CheckSpec {
+///
+/// `reserve_ok` and `cycle_budget_ok` are comparisons the solver's own
+/// numbers settle — the state of charge against the reserve floor inside the
+/// window, the cycles against the budget — so the battery crate makes them
+/// ([`BatteryFeatures::reserve_breached`], [`BatteryFeatures::cycles_within_budget`])
+/// and reports them in the same shape. `margin_plausible` is a judgment about
+/// whether an estimate still means anything, and goes to Jev.
+pub fn sanity_spec(chosen: ScheduleKind, features: &BatteryFeatures) -> CheckSpec {
     CheckSpec::new(format!("the {chosen} schedule"))
-        .item(
+        .rule(
             "reserve_ok",
             "The chosen schedule keeps the reserve available for the whole commitment window.",
             "the state of charge stays at or above the reserve level throughout",
             "the schedule draws the battery below the reserve level inside the window",
+            !features.reserve_breached,
         )
         .item(
             "margin_plausible",
@@ -228,11 +222,12 @@ pub fn sanity_spec(chosen: ScheduleKind) -> CheckSpec {
             "intraday has come away from the curve by more than recent variation \
              explains, so a day-ahead margin estimate is not reliable",
         )
-        .item(
+        .rule(
             "cycle_budget_ok",
             "The cycles this schedule uses sit comfortably inside the daily budget.",
             "there is room left in the budget after today",
             "the schedule spends most or all of the day's cycle budget",
+            features.cycles_within_budget,
         )
 }
 
@@ -247,7 +242,7 @@ pub fn risk_spec() -> ScoreSpec {
             "Minor: one condition worth noting, none of it binding.",
             "Real: a constraint that will bind, or an estimate that may not hold.",
             "High: the reserve is at risk, or the curve has stopped describing the market.",
-            "Severe: several of those at once.",
+            "Severe: the reserve commitment is threatened while intraday prices are dislocated from the day-ahead curve or grid constraints obstruct the schedule.",
         ],
     )
     .driver("reserve_at_risk", "The reserve commitment could be missed if this schedule runs.")
@@ -269,7 +264,9 @@ pub fn gate_spec(chosen: ScheduleKind, day: u32) -> GateSpec {
     )
 }
 
-/// Run the full battery pipeline over one day.
+/// Run the full battery pipeline over one day, in three calls: the regime and
+/// the ranking together, then the checks and the risk on the schedule that
+/// won, then the gate.
 pub async fn judge(
     pipeline: &mut Pipeline,
     world: &BatteryWorld,
@@ -277,11 +274,12 @@ pub async fn judge(
     schedules: &[Schedule],
     pre_rank: &BatteryDayInput,
 ) -> Result<(BatteryJudgment, BatteryDayInput)> {
-    let regime: ClassifyOut<MarketRegime> =
-        pipeline.classify("regime", pre_rank, &regime_spec()).await?;
-
-    let ranking: RankOut<ScheduleKind> =
-        pipeline.rank("rank", pre_rank, &rank_spec(schedules, &pre_rank.candidates)).await?;
+    let mut read = pipeline.batch("read", pre_rank);
+    let regime = read.classify::<MarketRegime>("regime", &regime_spec())?;
+    let ranking = read.rank("rank", &rank_spec(schedules, &pre_rank.candidates))?;
+    let mut read = read.send().await?;
+    let regime: ClassifyOut<MarketRegime> = read.take(regime)?;
+    let ranking: RankOut<ScheduleKind> = read.take(ranking)?;
     let chosen = ranking.top().expect("a ranking of three is never empty").id;
 
     // From here the pipeline judges the schedule that won, so the
@@ -293,11 +291,17 @@ pub async fn judge(
         ..pre_rank.clone()
     };
 
-    let checks = pipeline.check("sanity", &post_rank, &sanity_spec(chosen)).await?;
-    let risk = pipeline.score("risk", &post_rank, &risk_spec()).await?;
-    let gate = pipeline.gate("gate", &post_rank, &gate_spec(chosen, day)).await?;
+    let mut assess = pipeline.batch("assess", &post_rank);
+    let checks = assess.check("sanity", &sanity_spec(chosen, &post_rank.features))?;
+    let risk = assess.score("risk", &risk_spec())?;
+    let mut assessed = assess.send().await?;
+    let checks = assessed.take(checks)?;
+    let risk = assessed.take(risk)?;
 
-    Ok((BatteryJudgment { regime, ranking, chosen, checks, risk, gate }, post_rank))
+    let gate = pipeline.gate("gate", &post_rank, &gate_spec(chosen, day)).await?;
+    let review = REVIEW.review(regime.confidence, &checks);
+
+    Ok((BatteryJudgment { regime, ranking, chosen, checks, risk, gate, review }, post_rank))
 }
 
 /// Build the pre-ranking input for a day.

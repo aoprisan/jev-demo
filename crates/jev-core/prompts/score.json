@@ -1,0 +1,10 @@
+{
+  "level": {
+    "what": "Place the state on the ordered levels offered, lowest first. Level 0 is the floor and the last level is the ceiling; a genuinely benign state belongs at level 0.",
+    "not_for": "Recomputing anything the solver produced. The levels describe situations; match the state to the one it is in."
+  },
+  "driver": {
+    "what": "An independent claim about the state that may or may not drive the level. Answer it on its own merits against `state.input`.",
+    "not_for": "Justifying the level chosen. A claim that is true but immaterial is still true; the caller decides which drivers to report."
+  }
+}

@@ -53,14 +53,34 @@ before it is returned.
 | `Gate<I>` | `{ action, size_factor, reason }` | act / reduce / hold / escalate, and how much size | the actions' meanings, a size rubric |
 | `Classify<I,E>` | `{ label: E, confidence, reason }` | which label of a domain enum | the enum and its descriptions |
 | `Score<I>` | `{ score: 0..=100, drivers, reason }` | a position on a rubric, and which drivers hold | the rubric and the driver vocabulary |
-| `Check<I>` | `{ checks: [{ name, ok, note }] }` | each named plausibility claim | the claims |
-| `Rank<I,T>` | `{ ordered: [{ id, rationale }] }` | the ordering of solver-produced candidates | the candidates |
+| `Check<I>` | `{ checks: [{ name, ok, note, source }] }` | each named plausibility claim — or, for a `rule`, nothing: the domain decided it in code | the claims, and the rules' outcomes |
+| `Rank<I,T>` | `{ ordered: [{ id, rationale, fit }] }` | one fit rating per solver-produced candidate; code orders them | the candidates and a fit rubric |
 | `Explain<I>` | `{ summary, for_audience }` | framing, severity, which facts belong | the prose for each |
 
-Each primitive's standing instructions live in
-`crates/jev-core/prompts/<primitive>.md` and are identical across domains —
-`just prompts` prints them. Domain framing is injected as a context block, never
-as a separate prompt.
+### How a question is put
+
+System One takes a `state` to judge and a set of typed `questions` about it,
+and answers them in parallel. This crate keeps the two apart the way the docs
+ask:
+
+- **The state is content only.** `{"context": …, "input": …, "prior_judgments": […]}`
+  — a sentence or two of domain framing (which solver proposed this, that its
+  numbers are final), the observable input, and earlier stages' typed outputs.
+  Nothing instruction-like goes in it, and nothing in it restates a number a
+  field already carries.
+- **Every instruction travels in its question.** A question's `instructions`
+  is a JSON object: the caller's `question` merged with the primitive's
+  standing guidance — named fields such as `what`, `not_for` and `evidence` —
+  from `crates/jev-core/prompts/<primitive>.json`. The guidance is identical
+  across domains; `just prompts` prints it. There is no prose prompt.
+- **Independent questions share a call.** A `Pipeline` batch fans several
+  stages into one request (forex asks the regime, the checks and the risk
+  together); only a stage that needs an earlier answer goes in a later call.
+- **Known rules stay in code.** A check that is a comparison — the stop
+  against an ATR multiple, cycles against a budget — is evaluated by the
+  domain and reported as a `rule`; Jev is asked only the judgments, and reads
+  the rules' outcomes as plain facts in the state (`stop_clears_noise`,
+  `reserve_breached`, `cycles_within_budget`).
 
 ### What Jev actually returns, and what that means for `reason`
 
@@ -84,8 +104,10 @@ That is a stronger arrangement than free text would be, not a weaker one:
 - `Score`'s `drivers` are a fixed vocabulary of nouls, so every reported driver
   carries its own probability and can be tested — rather than three phrases a
   model invented.
-- `Rank` reads its entire ordering off **one** choice distribution. One call, N
-  candidates, and the margins come out with it.
+- `Rank` asks one fit `Score` per candidate on a shared rubric, in one call,
+  and sorts the ratings in code. A single choice over the candidates would
+  give the probability that each is *best*, which is not a second place or a
+  margin; comparable ratings are.
 - `Explain` chooses the framing, the severity and which facts belong; the
   wording of each is the caller's. The same run is genuinely a different summary
   for a trader and for compliance, and neither can contain a fact the run did
@@ -99,7 +121,8 @@ A schema violation is an error, not a degraded answer. `jev-core` rejects:
 - a string or list beyond its bound (`reason` over 160 characters, more than three drivers);
 - a label outside the enum that was offered;
 - an answer of the wrong kind, or a missing answer;
-- a ranking that does not cover exactly the candidates it was given;
+- a ranking missing a candidate's rating;
+- a `rule` check carrying a probability that is not 0 or 1;
 - a **contradiction** — a `hold` carrying size, or a `reduce` carrying none.
 
 Nothing degrades to `Execute`. `just schemas` prints the JSON Schema of each
@@ -109,32 +132,46 @@ output; `validate()` enforces the same bounds in code.
 
 ## Composition
 
-`Pipeline` threads each stage's typed output into the state *and* the context
-block of every later stage, so a gate can see that a check failed without the
-domain restating it. Every call is tagged with its stage and recorded.
+`Pipeline` threads each stage's typed output into the state of every later
+stage under `prior_judgments`, so a gate can see that a check failed without
+the domain restating it. Stages that do not depend on one another go into one
+**batch** — one call, every question answered in parallel — and the audit
+records the call once, listing the stages it carried.
 
-**Forex** — `Classify(regime) → Check(sanity) → Score(event risk) → Gate`
+**Forex** — `[Classify(regime), Check(sanity), Score(event risk)] → Gate` — two calls
 
 ```
 Classify<FxRegime>        ranging | trending | event_driven
-Check                     stop_sane, signal_valid_in_regime, correlated_exposure_ok
+Check                     stop_sane (rule), signal_valid_in_regime, correlated_exposure_ok
 Score                     event risk 0..=100, drivers from a fixed vocabulary
-Gate                      on the candidate, seeing all three above
+Gate                      on the candidate, seeing all three above as priors
 ```
 
-**Battery** — `Classify(regime) → Rank(schedules) → Check(sanity) → Score(risk) → Gate`
+**Battery** — `[Classify(regime), Rank(schedules)] → [Check(sanity), Score(risk)] → Gate` — three calls
 
 ```
 Classify<MarketRegime>    normal | volatile | illiquid | stressed
 Rank<ScheduleKind>        aggressive | balanced | reserve_heavy — all three valid
-Check                     reserve_ok, margin_plausible, cycle_budget_ok
+Check                     reserve_ok (rule), margin_plausible, cycle_budget_ok (rule)
 Score                     operational risk 0..=100
 Gate                      on the schedule the ranking chose
 ```
 
 The battery pipeline is the one that shows `Rank` doing real work: the solver
-emits three complete, valid schedules and Jev orders them, after which the
-checks and the gate judge the winner rather than the default.
+emits three complete, valid schedules and Jev rates them, after which the
+checks and the gate judge the winner rather than the default — which is why
+they cannot share the first call: the state they read is rebuilt around it.
+
+### Routing on certainty, in code
+
+Every verdict comes back with the distribution behind it. A `ReviewPolicy`
+per domain reads it and flags a decision for a second look when the regime
+call was a near-tie (confidence under 0.10) or a judged check landed inside
+0.4–0.6, neither a pass nor a fail anyone should lean on. The flag never
+changes the gate's verdict; it is reported beside it. On the default seed the
+mock flags 16 of 214 forex decisions and 33 of 90 battery days — the battery
+mock's regime rules are genuinely indecisive between `volatile` and
+`illiquid`, and the flag says so rather than hiding it in an argmax.
 
 ---
 
@@ -149,9 +186,12 @@ that drives its price process. **Nothing in the judgment path can read it.**
   truth, so the type system keeps it out of scope.
 - `MockJev` sees only the serialised state — the same thing a live model sees —
   and reads observable features only.
-- `crates/fx/tests/honesty.rs` asserts that no state, context block or audit
+- `crates/fx/tests/honesty.rs` asserts that no state, framing or audit
   record ever contains it, and that the classifier therefore **does not** match
   it perfectly. A perfect score would mean the truth had leaked.
+- The generator's `informative` label on each headline is not sent either:
+  the headline text is observable, a count of which ones the generator meant
+  is not.
 
 Where the brief specifies a mock rule against the true regime ("signal invalid
 when true regime is Trending"), the mock uses an observable stand-in — a
@@ -186,10 +226,10 @@ hours the chosen schedule discharges in. Same prices, same three schedules, one
 note:
 
 ```
-  rank                no notice             notice added
-  1          1. balanced (0.50)  1. reserve_heavy (0.62)
-  2        2. aggressive (0.36)       2. balanced (0.31)
-  3     3. reserve_heavy (0.14)     3. aggressive (0.07)
+  rank                    no notice                 notice added
+  1          1. balanced (fit 1.00)  1. reserve_heavy (fit 1.00)
+  2        2. aggressive (fit 0.72)       2. balanced (fit 0.50)
+  3     3. reserve_heavy (fit 0.28)     3. aggressive (fit 0.12)
 
   the ranking flipped: balanced -> reserve_heavy
 ```
@@ -226,12 +266,12 @@ behind it rather than a spinner. Then:
 |---|---|
 | `POST /api/runs` | `{ domain, seed, days, limit, mock }` → `202` and a running summary |
 | `GET /api/runs/{id}` | the summary, and the whole result once it is done |
-| `GET /api/runs/{id}/fx/decisions/{i}` | one candidate: the features Jev read, all four stages, both fills |
-| `GET /api/runs/{id}/battery/days/{d}` | one day: all three schedules, all five stages, both executions |
+| `GET /api/runs/{id}/fx/decisions/{i}` | one candidate: the features Jev read, all four stages, the review flag, both fills |
+| `GET /api/runs/{id}/battery/days/{d}` | one day: all three schedules, all five stages, the review flag, both executions |
 | `GET /api/runs/{id}/calls` | the audit log, paged; `/calls/{i}` is one call in full |
 | `GET /api/runs/{id}/decisions.jsonl` | the audit log as the CLI writes it, one object per line |
 | `GET /api/runs/{id}/report` | `report.md`, byte for byte |
-| `GET /api/prompts`, `/api/schemas` | the standing instructions and the output schemas |
+| `GET /api/prompts`, `/api/schemas` | the standing guidance and the output schemas |
 
 `--mock` is still the only switch, and it is per request: one process can serve
 both backends, and a live run is refused with a reason rather than a stack
@@ -365,14 +405,15 @@ so adding a headline does not shift the prices generated after it.
 just test     # offline by construction; no test calls the live API
 ```
 
-155 tests, covering synth determinism by seed and the shape of both worlds; the
+168 tests, covering synth determinism by seed and the shape of both worlds; the
 strategy and the solver on fixed fixtures with hand-computed expectations; each
 primitive's schema validation rejecting bad output; the mock's rules stated
 against the specification they implement; both engines' P&L on tiny fixtures;
-that the pipeline passes prior outputs into later stages correctly; that no
-ground truth reaches a judgment call; the live client's translation in both
-directions, against a stub System One server; and the HTTP API's shape, driven
-through the router itself.
+that the pipeline passes prior outputs into later stages correctly and a batch
+fans independent stages into one call; that nothing instruction-like reaches
+the state; that no ground truth reaches a judgment call; the live client's
+translation in both directions, against a stub System One server; and the HTTP
+API's shape, driven through the router itself.
 
 `just check` additionally runs `cargo fmt --check` and `clippy -D warnings`.
 
@@ -382,14 +423,17 @@ All rules in one file, `crates/jev-core/src/mock.rs`, with the thresholds
 exposed as constants so a test can state the rule and the number in one place.
 The action and the size come from a single rule evaluation — deriving them
 separately lets them contradict each other. The most cautious applicable rule
-wins.
+wins. The rule checks never reach the mock: the domains decide them and the
+mock reads the outcome as a flag, the way a live model would.
 
 ## Cost
 
-A full 90-day forex run is 858 typed calls — 214 decisions at four calls each,
-plus two `Explain` calls for the report. Battery is 452: 90 days at five calls
-each, plus the same two. The replay at the end of each demo judges one more day
-twice, so `decisions.jsonl` carries a handful more lines than the figure the
-report prints.
+A full 90-day forex run is 428 typed calls — 214 decisions at two calls each
+(the batch of three independent stages, then the gate) — plus two `Explain`
+calls for the report. Battery is 270: 90 days at three calls each, plus the
+same two. Adding questions to a call barely moves its latency, so this is
+roughly half the wall-clock of one call per stage for the same judgments. The
+replay at the end of each demo judges one more day twice, so `decisions.jsonl`
+carries a handful more lines than the figure the report prints.
 
 Use `--limit N` to judge only the first N days when running live.

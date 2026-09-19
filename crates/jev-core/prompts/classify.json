@@ -1,0 +1,7 @@
+{
+  "label": {
+    "what": "Assign the state to exactly one of the offered labels. They partition the domain: every state belongs to one of them.",
+    "not_for": "Inventing a label that is not offered, or reading the label from what the caller appears to want, from the order the labels are offered, or from the solver's proposal.",
+    "evidence": "Only what is observable in `state.input`. The label descriptions are the whole definition of each label."
+  }
+}

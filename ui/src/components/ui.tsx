@@ -83,7 +83,12 @@ export function CheckList({ checks }: { checks: CheckView[] }) {
         <div className="item" key={check.name}>
           <Badge kind={check.ok ? "ok" : "fail"}>{check.ok ? "ok" : "fail"}</Badge>
           <div>
-            <div className="mono">{check.name}</div>
+            <div className="mono">
+              {check.name}{" "}
+              <span className="dim" title={check.source === "rule" ? "a comparison the domain makes in code" : "a judgment Jev made from the state"}>
+                · {check.source}
+              </span>
+            </div>
             <div className="note">{check.note}</div>
           </div>
         </div>

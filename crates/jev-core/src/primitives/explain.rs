@@ -9,9 +9,10 @@ use super::{
     JevInput,
 };
 use crate::ask::{Ask, Asks};
-use crate::client::Primitive;
+use crate::client::{JevReply, Primitive};
 use crate::error::{JevError, Result};
 use crate::jev::Jev;
+use crate::prompts;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -190,6 +191,11 @@ pub struct ExplainOut {
 }
 
 impl ExplainOut {
+    /// The one-line rendering later stages see in `prior_judgments`.
+    pub fn line(&self) -> String {
+        self.summary.clone()
+    }
+
     /// Re-check every schema bound.
     pub fn validate(&self) -> Result<()> {
         at_most_chars(P, "summary", &self.summary, MAX_SUMMARY)
@@ -206,110 +212,126 @@ pub trait Explain<I: JevInput> {
 #[async_trait::async_trait]
 impl<I: JevInput> Explain<I> for Jev {
     async fn explain(&self, input: &I, spec: &ExplainSpec) -> Result<ExplainOut> {
-        if spec.framings.len() < 2 {
-            return Err(JevError::InvalidCall("explain needs at least two framings".into()));
-        }
-        if spec.severity.len() < 2 {
-            return Err(JevError::InvalidCall("explain needs at least two severity levels".into()));
-        }
-        let audience = spec.audience;
-        let mut asks = Asks::new()
-            .with(
-                "framing",
-                Ask::choice(
-                    format!(
-                        "A summary of {} is being written for {}, who wants {}. Which framing \
-                         should lead?",
-                        spec.subject,
-                        audience.as_str(),
-                        audience.wants()
-                    ),
-                    spec.framings.iter().map(|f| (f.label.clone(), f.describe.clone())),
-                ),
-            )
-            .with(
-                "severity",
-                Ask::score(
-                    format!("How serious was {} overall?", spec.subject),
-                    spec.severity.iter().map(|(describe, _)| describe.clone()),
-                ),
-            );
-        for fact in &spec.facts {
-            asks = asks.with(
-                format!("fact_{}", fact.name),
-                Ask::noul(format!(
-                    "{} Does this belong in a summary for {}?",
-                    fact.claim,
-                    audience.as_str()
-                ))
-                .criteria(
-                    "This audience needs it to understand the day.",
-                    "True, but not what this audience is reading for.",
-                ),
-            );
-        }
-
-        let outcome = self.call(Primitive::Explain, input, asks).await?;
-        let (label, probabilities, confidence) = need_choice(&outcome.reply, "framing", P)?;
-        let framing = spec.framings.iter().find(|f| f.label == label).ok_or_else(|| {
-            JevError::UnknownLabel {
-                primitive: P,
-                label: label.to_owned(),
-                allowed: spec
-                    .framings
-                    .iter()
-                    .map(|f| f.label.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            }
-        })?;
-
-        let (fraction, _) = need_score(&outcome.reply, "severity", P)?;
-        in_range(P, "severity", fraction, 0.0, 1.0)?;
-        let level = (fraction * (spec.severity.len() - 1) as f64).round() as usize;
-        let severity_word =
-            spec.severity.get(level.min(spec.severity.len() - 1)).map(|(_, w)| w.as_str());
-
-        let mut included = Vec::new();
-        for fact in &spec.facts {
-            let p = need_noul(&outcome.reply, &format!("fact_{}", fact.name), P)?;
-            in_range(P, "fact", p, 0.0, 1.0)?;
-            if p >= spec.fact_threshold {
-                included.push(fact.phrase.clone());
-            }
-        }
-
-        let mut summary = format!("{} — {}", spec.subject, end_sentence(&framing.lead));
-        if let Some(word) = severity_word {
-            summary.push_str(&format!(" The session was {word}."));
-        }
-        // Add facts only while the whole summary still fits. Dropping a fact
-        // that will not fit is honest; cutting one off mid-word reads as a bug
-        // and tells the reader less than leaving it out.
-        let mut kept: Vec<String> = Vec::new();
-        for fact in included {
-            let mut candidate = kept.clone();
-            candidate.push(fact);
-            let attempt = format!("{summary} {}", end_sentence(&join_sentence(&candidate)));
-            if attempt.chars().count() <= MAX_SUMMARY {
-                kept = candidate;
-            }
-        }
-        if !kept.is_empty() {
-            summary.push(' ');
-            summary.push_str(&end_sentence(&join_sentence(&kept)));
-        }
-        let summary = fit(&summary, MAX_SUMMARY);
-
-        let out = ExplainOut {
-            summary,
-            for_audience: audience,
-            evidence: evidence_from(probabilities, confidence),
-        };
-        out.validate()?;
+        let outcome = self.call(Primitive::Explain, input, asks(spec, "")?).await?;
+        let out = compose(spec, &outcome.reply, "")?;
         self.record(&outcome, &out)?;
         Ok(out)
     }
+}
+
+/// The framing, the severity, and one noul per candidate fact.
+pub(crate) fn asks(spec: &ExplainSpec, prefix: &str) -> Result<Asks> {
+    if spec.framings.len() < 2 {
+        return Err(JevError::InvalidCall("explain needs at least two framings".into()));
+    }
+    if spec.severity.len() < 2 {
+        return Err(JevError::InvalidCall("explain needs at least two severity levels".into()));
+    }
+    let audience = spec.audience;
+    let for_audience = || {
+        [
+            ("audience", serde_json::Value::String(audience.as_str().to_owned())),
+            ("audience_wants", serde_json::Value::String(audience.wants().to_owned())),
+        ]
+    };
+    let mut asks = Asks::new()
+        .with(
+            format!("{prefix}framing"),
+            Ask::choice(
+                prompts::instructions(
+                    Primitive::Explain,
+                    "framing",
+                    format!("Which framing should lead a summary of {}?", spec.subject),
+                    for_audience(),
+                ),
+                spec.framings.iter().map(|f| (f.label.clone(), f.describe.clone())),
+            ),
+        )
+        .with(
+            format!("{prefix}severity"),
+            Ask::score(
+                prompts::instructions(
+                    Primitive::Explain,
+                    "severity",
+                    format!("How serious was {} overall?", spec.subject),
+                    [],
+                ),
+                spec.severity.iter().map(|(describe, _)| describe.clone()),
+            ),
+        );
+    for fact in &spec.facts {
+        asks = asks.with(
+            format!("{prefix}fact_{}", fact.name),
+            Ask::noul(prompts::instructions(
+                Primitive::Explain,
+                "fact",
+                format!("{} Does this belong in the summary?", fact.claim),
+                for_audience(),
+            ))
+            .criteria(
+                "This audience needs it to understand the day.",
+                "True, but not what this audience is reading for.",
+            ),
+        );
+    }
+    Ok(asks)
+}
+
+/// The summary, composed from the caller's prose for what Jev chose.
+pub(crate) fn compose(spec: &ExplainSpec, reply: &JevReply, prefix: &str) -> Result<ExplainOut> {
+    let audience = spec.audience;
+    let (label, probabilities, confidence) = need_choice(reply, &format!("{prefix}framing"), P)?;
+    let framing =
+        spec.framings.iter().find(|f| f.label == label).ok_or_else(|| JevError::UnknownLabel {
+            primitive: P,
+            label: label.to_owned(),
+            allowed: spec.framings.iter().map(|f| f.label.as_str()).collect::<Vec<_>>().join(", "),
+        })?;
+
+    let (fraction, _) = need_score(reply, &format!("{prefix}severity"), P)?;
+    in_range(P, "severity", fraction, 0.0, 1.0)?;
+    let level = (fraction * (spec.severity.len() - 1) as f64).round() as usize;
+    let severity_word =
+        spec.severity.get(level.min(spec.severity.len() - 1)).map(|(_, w)| w.as_str());
+
+    let mut included = Vec::new();
+    for fact in &spec.facts {
+        let p = need_noul(reply, &format!("{prefix}fact_{}", fact.name), P)?;
+        in_range(P, "fact", p, 0.0, 1.0)?;
+        if p >= spec.fact_threshold {
+            included.push(fact.phrase.clone());
+        }
+    }
+
+    let mut summary = format!("{} — {}", spec.subject, end_sentence(&framing.lead));
+    if let Some(word) = severity_word {
+        summary.push_str(&format!(" The session was {word}."));
+    }
+    // Add facts only while the whole summary still fits. Dropping a fact
+    // that will not fit is honest; cutting one off mid-word reads as a bug
+    // and tells the reader less than leaving it out.
+    let mut kept: Vec<String> = Vec::new();
+    for fact in included {
+        let mut candidate = kept.clone();
+        candidate.push(fact);
+        let attempt = format!("{summary} {}", end_sentence(&join_sentence(&candidate)));
+        if attempt.chars().count() <= MAX_SUMMARY {
+            kept = candidate;
+        }
+    }
+    if !kept.is_empty() {
+        summary.push(' ');
+        summary.push_str(&end_sentence(&join_sentence(&kept)));
+    }
+    let summary = fit(&summary, MAX_SUMMARY);
+
+    let out = ExplainOut {
+        summary,
+        for_audience: audience,
+        evidence: evidence_from(probabilities, confidence),
+    };
+    out.validate()?;
+    Ok(out)
 }
 
 fn join_sentence(parts: &[String]) -> String {

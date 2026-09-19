@@ -83,16 +83,33 @@ fn gate_rows(session: &FxSession) -> Vec<Vec<String>> {
 
 fn check_rows(session: &FxSession) -> Vec<Vec<String>> {
     let total = session.decisions.len();
-    let mut rows = vec![vec!["check".into(), "failed".into(), "of".into()]];
+    let mut rows = vec![vec!["check".into(), "decided by".into(), "failed".into(), "of".into()]];
     for name in CHECKS {
         let failed = session
             .decisions
             .iter()
             .filter(|d| d.judgment.checks.get(name).is_some_and(|c| !c.ok))
             .count();
-        rows.push(vec![name.to_owned(), failed.to_string(), total.to_string()]);
+        rows.push(vec![
+            name.to_owned(),
+            check_source(session.decisions.iter().map(|d| &d.judgment.checks), name),
+            failed.to_string(),
+            total.to_string(),
+        ]);
     }
     rows
+}
+
+/// Who decided a named check: a rule in the domain's code, or Jev.
+pub(crate) fn check_source<'a>(
+    mut checks: impl Iterator<Item = &'a jev_core::CheckOut>,
+    name: &str,
+) -> String {
+    match checks.find_map(|c| c.get(name)).map(|c| c.source) {
+        Some(jev_core::CheckSource::Rule) => "rule".into(),
+        Some(jev_core::CheckSource::Jev) => "jev".into(),
+        None => "—".into(),
+    }
 }
 
 /// Each named check held up against the outcomes it flagged.
@@ -168,6 +185,18 @@ fn terminal(
 
     s.push_str(&heading("Checks"));
     s.push_str(&table(&check_rows(session)));
+    s.push_str(&dim(
+        "  a rule is a comparison the fx crate makes itself; a jev check is a judgment
+",
+    ));
+
+    s.push_str(&heading("Review"));
+    s.push_str(&format!(
+        "  {} of {} decisions flagged for a second look on thin certainty (the gate stands)
+",
+        session.reviews(),
+        session.decisions.len()
+    ));
 
     s.push_str(&heading("Regime classification"));
     s.push_str(&format!(

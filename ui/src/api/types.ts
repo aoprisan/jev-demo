@@ -84,12 +84,17 @@ export interface ClassifyView {
   distribution: WeightView[];
 }
 
+/** Who decided a check: Jev from the state, or the domain's own rule in code. */
+export type CheckSource = "jev" | "rule";
+
 /** A `Check` result. */
 export interface CheckView {
   name: string;
   ok: boolean;
   note: string;
+  /** The probability behind it; exactly 0 or 1 for a rule. */
   p: number;
+  source: CheckSource;
 }
 
 /** A `Score` output. */
@@ -114,7 +119,8 @@ export interface GateView {
 export interface RankedView {
   id: string;
   rationale: string;
-  p: number;
+  /** Jev's rating of this candidate's fit, 0..=1 of the shared rubric. */
+  fit: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -196,9 +202,12 @@ export interface FxDecisionRow {
 export interface FxFeatures {
   pair: string;
   side: string;
-  hours_to_event: number;
+  /** Absent when no release is in sight. */
+  hours_to_event: number | null;
   next_event_kind: string | null;
   stop_atr_multiple: number;
+  /** Whether that distance clears the window's ordinary noise: the fx crate's rule. */
+  stop_clears_noise: boolean;
   reward_risk: number;
   trend_strength: number;
   volatility_percentile: number;
@@ -209,7 +218,6 @@ export interface FxFeatures {
   exposure_multiple: number;
   pre_trade_exposure_share: number;
   post_trade_exposure_share: number;
-  informative_headlines: number;
   stress_indicator: number;
 }
 
@@ -237,6 +245,8 @@ export interface FxDecisionDetail {
   checks: CheckView[];
   risk: ScoreView;
   gate: GateView;
+  /** Why the review policy flagged this decision, if it did. */
+  review: string | null;
   ungated: FillView | null;
   gated: FillView | null;
 }
@@ -270,6 +280,8 @@ export interface FxResult {
   regime_accuracy: number;
   interventions: number;
   escalations: number;
+  /** Decisions the review policy flagged on thin certainty; the gate stands. */
+  reviews: number;
   failed_checks: number;
   scorecard: CheckScorecardView[];
   equity: EquityPoint[];
@@ -364,6 +376,8 @@ export interface BatteryDayDetail {
   checks: CheckView[];
   risk: ScoreView;
   gate: GateView;
+  /** Why the review policy flagged this day, if it did. */
+  review: string | null;
   solver_only: ExecutionView;
   gated: ExecutionView;
 }
@@ -400,6 +414,8 @@ export interface BatteryResult {
   rank_distribution: ScheduleCount[];
   interventions: number;
   escalations: number;
+  /** Days the review policy flagged on thin certainty; the gate stands. */
+  reviews: number;
   failed_checks: number;
   margin_curve: MarginPoint[];
   days: BatteryDayRow[];

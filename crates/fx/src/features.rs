@@ -14,6 +14,10 @@ use synth::{Bar, CalendarEvent, Currency, Exposure, Pair, Stamp};
 const PERCENTILE_LOOKBACK: usize = 60;
 /// Bars used for the efficiency ratio.
 const TREND_LOOKBACK: usize = 12;
+/// A stop at least this many ATRs from entry clears the window's ordinary
+/// noise. The `stop_sane` check is this comparison, made here in code; Jev
+/// reads the outcome as `stop_clears_noise`.
+pub const STOP_CLEARS_NOISE_ATR: f64 = 1.2;
 
 /// The observable state of one forex decision.
 ///
@@ -26,13 +30,18 @@ pub struct FxFeatures {
     pub pair: String,
     /// `long` or `short`.
     pub side: String,
-    /// Hours until the next scheduled release touching either leg. Large when
-    /// there is none in sight.
-    pub hours_to_event: f64,
+    /// Hours until the next scheduled release touching either leg. Absent
+    /// when there is none in sight, rather than a large number the reader
+    /// would have to know to ignore.
+    pub hours_to_event: Option<f64>,
     /// The kind of that release, e.g. `CPI`. Absent when none is scheduled.
     pub next_event_kind: Option<String>,
     /// The stop's distance from entry, in ATRs. The solver's stop, measured.
     pub stop_atr_multiple: f64,
+    /// Whether that distance clears the window's ordinary noise
+    /// ([`STOP_CLEARS_NOISE_ATR`]). The comparison is made here; a model reads
+    /// the fact rather than redoing the arithmetic.
+    pub stop_clears_noise: bool,
     /// Reward over risk, as the solver sized it.
     pub reward_risk: f64,
     /// Directional persistence of the recent window, `0..=1`. High means the
@@ -56,8 +65,6 @@ pub struct FxFeatures {
     pub pre_trade_exposure_share: f64,
     /// That share after the trade.
     pub post_trade_exposure_share: f64,
-    /// Informative headlines printed today.
-    pub informative_headlines: u32,
     /// A composite of the conditions that make a market hard to act in at all.
     pub stress_indicator: f64,
 }
@@ -72,7 +79,6 @@ impl FxFeatures {
         bars: &[Bar],
         calendar: &[CalendarEvent],
         book: &[Exposure],
-        headlines_today: u32,
         p: &StrategyParams,
     ) -> Self {
         let i = candidate.bar_index;
@@ -80,7 +86,7 @@ impl FxFeatures {
         let current_atr = atr(bars, i, p.atr_period).unwrap_or(f64::EPSILON).max(f64::EPSILON);
 
         let next_event = next_event_for(pair, candidate.t, calendar);
-        let hours_to_event = next_event.map(|e| candidate.t.hours_to(e.t)).unwrap_or(999.0);
+        let hours_to_event = next_event.map(|e| candidate.t.hours_to(e.t));
 
         let trend_strength = efficiency_ratio(bars, i, TREND_LOOKBACK).unwrap_or(0.0);
         let volatility_percentile = percentile_of(
@@ -105,8 +111,11 @@ impl FxFeatures {
 
         // Stress is not one observation but the coincidence of several: a wide
         // market, an event on the way, and a book already leaning one way.
-        let event_pressure =
-            if hours_to_event <= 6.0 { 1.0 - (hours_to_event / 6.0).clamp(0.0, 1.0) } else { 0.0 };
+        let event_pressure = match hours_to_event {
+            Some(h) if h <= 6.0 => 1.0 - (h / 6.0).clamp(0.0, 1.0),
+            _ => 0.0,
+        };
+        let stop_atr_multiple = candidate.stop_distance() / current_atr;
         let stress_indicator = (0.45 * volatility_percentile
             + 0.35 * event_pressure
             + 0.20 * exposure.post_share.min(1.0))
@@ -117,7 +126,8 @@ impl FxFeatures {
             side: candidate.side.as_str().to_owned(),
             hours_to_event,
             next_event_kind: next_event.map(|e| e.kind.code().to_owned()),
-            stop_atr_multiple: candidate.stop_distance() / current_atr,
+            stop_atr_multiple,
+            stop_clears_noise: stop_atr_multiple >= STOP_CLEARS_NOISE_ATR,
             reward_risk: candidate.reward_risk(),
             trend_strength,
             volatility_percentile,
@@ -128,7 +138,6 @@ impl FxFeatures {
             exposure_multiple: exposure.multiple,
             pre_trade_exposure_share: exposure.pre_share,
             post_trade_exposure_share: exposure.post_share,
-            informative_headlines: headlines_today,
             stress_indicator,
         }
     }
@@ -199,10 +208,8 @@ pub fn added_currency(pair: Pair, side: crate::strategy::Side) -> Currency {
 /// Shared so the terminal replay and the HTTP API describe the same distance
 /// the same way.
 pub fn event_label(features: &FxFeatures) -> String {
-    match features.next_event_kind.as_deref() {
-        Some(kind) if features.hours_to_event < 72.0 => {
-            format!("{kind} in {:.1}h", features.hours_to_event)
-        }
+    match (features.next_event_kind.as_deref(), features.hours_to_event) {
+        (Some(kind), Some(hours)) if hours < 72.0 => format!("{kind} in {hours:.1}h"),
         _ => "none scheduled".to_owned(),
     }
 }

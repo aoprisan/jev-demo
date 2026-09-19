@@ -103,6 +103,12 @@ impl BatterySession {
         self.days.iter().filter(|d| d.judgment.gate.action == Action::Escalate).count()
     }
 
+    /// How many days the review policy flagged for a second look, on the
+    /// certainty behind the judgments rather than on the gate's verdict.
+    pub fn reviews(&self) -> usize {
+        self.days.iter().filter(|d| d.judgment.review.is_some()).count()
+    }
+
     /// The days where the judgment layer mattered most, largest first.
     pub fn most_consequential(&self, n: usize) -> Vec<&DayRecord> {
         let mut ranked: Vec<&DayRecord> = self.days.iter().filter(|d| d.intervened()).collect();

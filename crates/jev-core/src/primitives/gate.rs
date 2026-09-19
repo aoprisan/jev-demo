@@ -5,9 +5,10 @@ use super::{
     JevInput,
 };
 use crate::ask::{Ask, Asks};
-use crate::client::Primitive;
+use crate::client::{JevReply, Primitive};
 use crate::error::{JevError, Result};
 use crate::jev::Jev;
+use crate::prompts;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -121,6 +122,11 @@ pub struct GateOut {
 }
 
 impl GateOut {
+    /// The one-line rendering later stages see in `prior_judgments`.
+    pub fn line(&self) -> String {
+        self.reason.clone()
+    }
+
     /// Re-check every schema bound. Called on construction; public so a decoded
     /// record from `decisions.jsonl` can be re-validated.
     pub fn validate(&self) -> Result<()> {
@@ -150,6 +156,16 @@ impl GateOut {
                 ),
             });
         }
+        if (self.action == Action::Execute && self.size_factor != 1.0)
+            || (self.action == Action::Reduce && self.size_factor >= 1.0)
+        {
+            return Err(JevError::Contradiction {
+                primitive: P,
+                detail:
+                    "execute requires full size; reduce requires a strictly smaller positive size"
+                        .into(),
+            });
+        }
         Ok(())
     }
 }
@@ -164,66 +180,86 @@ pub trait Gate<I: JevInput> {
 #[async_trait::async_trait]
 impl<I: JevInput> Gate<I> for Jev {
     async fn gate(&self, input: &I, spec: &GateSpec) -> Result<GateOut> {
-        if spec.size_levels.len() < 2 {
-            return Err(JevError::InvalidCall("gate size rubric needs at least two levels".into()));
-        }
-        let asks = Asks::new()
-            .with(
-                "action",
-                Ask::choice(
-                    spec.question.clone(),
-                    Action::ALL.iter().map(|a| (a.as_str(), a.describe())),
-                ),
-            )
-            .with(
-                "size_factor",
-                Ask::score(
-                    format!(
-                        "Given the same state, how much of the solver's intended size do \
-                         conditions justify for {}?",
-                        spec.subject
-                    ),
-                    spec.size_levels.clone(),
-                ),
-            );
-
-        let outcome = self.call(Primitive::Gate, input, asks).await?;
-        let (label, probabilities, confidence) = need_choice(&outcome.reply, "action", P)?;
-        let action = Action::parse(label).ok_or_else(|| JevError::UnknownLabel {
-            primitive: P,
-            label: label.to_owned(),
-            allowed: Action::ALL.iter().map(Action::as_str).collect::<Vec<_>>().join(", "),
-        })?;
-        let (fraction, _) = need_score(&outcome.reply, "size_factor", P)?;
-        in_range(P, "size_factor", fraction, 0.0, 1.0)?;
-
-        // Hold and escalate do not put anything on; the rubric is not consulted.
-        let size_factor = if action.acts() { fraction as f32 } else { 0.0 };
-        let evidence = evidence_from(probabilities, confidence);
-
-        let cue = priors_cue(&outcome.call.state);
-        let top = evidence.distribution.first().map(|w| w.p).unwrap_or(0.0);
-        let runner = evidence
-            .runner_up()
-            .map(|w| format!("; next {} {:.2}", w.label, w.p))
-            .unwrap_or_default();
-        let reason = fit(
-            &format!(
-                "{}: {} at {:.0}% of size{} (p={:.2}, conf {:.2}{})",
-                spec.subject,
-                action.as_str(),
-                size_factor * 100.0,
-                cue.map(|c| format!(" — {c}")).unwrap_or_default(),
-                top,
-                confidence,
-                runner,
-            ),
-            MAX_REASON,
-        );
-
-        let out = GateOut { action, size_factor, reason, evidence };
-        out.validate()?;
+        let outcome = self.call(Primitive::Gate, input, asks(spec, "")?).await?;
+        let out = compose(spec, &outcome.reply, &outcome.call.state, "")?;
         self.record(&outcome, &out)?;
         Ok(out)
     }
+}
+
+/// The gate's two questions: the action, and how much of the size.
+pub(crate) fn asks(spec: &GateSpec, prefix: &str) -> Result<Asks> {
+    if spec.size_levels.len() < 2 {
+        return Err(JevError::InvalidCall("gate size rubric needs at least two levels".into()));
+    }
+    Ok(Asks::new()
+        .with(
+            format!("{prefix}action"),
+            Ask::choice(
+                prompts::instructions(Primitive::Gate, "action", spec.question.clone(), []),
+                Action::ALL.iter().map(|a| (a.as_str(), a.describe())),
+            ),
+        )
+        .with(
+            format!("{prefix}size_factor"),
+            Ask::score(
+                prompts::instructions(
+                    Primitive::Gate,
+                    "size_factor",
+                    format!(
+                        "Assuming a reduced action is appropriate, what smaller positive fraction of the solver's intended size do conditions justify for {}?",
+                        spec.subject
+                    ),
+                    [],
+                ),
+                spec.size_levels.clone(),
+            ),
+        ))
+}
+
+/// The verdict, composed from the reply and validated.
+pub(crate) fn compose(
+    spec: &GateSpec,
+    reply: &JevReply,
+    state: &serde_json::Value,
+    prefix: &str,
+) -> Result<GateOut> {
+    let (label, probabilities, confidence) = need_choice(reply, &format!("{prefix}action"), P)?;
+    let action = Action::parse(label).ok_or_else(|| JevError::UnknownLabel {
+        primitive: P,
+        label: label.to_owned(),
+        allowed: Action::ALL.iter().map(Action::as_str).collect::<Vec<_>>().join(", "),
+    })?;
+    let (fraction, _) = need_score(reply, &format!("{prefix}size_factor"), P)?;
+    in_range(P, "size_factor", fraction, 0.0, 1.0)?;
+
+    // Only a reduced action consumes the speculative sizing judgment.
+    let size_factor = match action {
+        Action::Execute => 1.0,
+        Action::Reduce => fraction as f32,
+        Action::Hold | Action::Escalate => 0.0,
+    };
+    let evidence = evidence_from(probabilities, confidence);
+
+    let cue = priors_cue(state);
+    let top = evidence.distribution.first().map(|w| w.p).unwrap_or(0.0);
+    let runner =
+        evidence.runner_up().map(|w| format!("; next {} {:.2}", w.label, w.p)).unwrap_or_default();
+    let reason = fit(
+        &format!(
+            "{}: {} at {:.0}% of size{} (p={:.2}, conf {:.2}{})",
+            spec.subject,
+            action.as_str(),
+            size_factor * 100.0,
+            cue.map(|c| format!(" — {c}")).unwrap_or_default(),
+            top,
+            confidence,
+            runner,
+        ),
+        MAX_REASON,
+    );
+
+    let out = GateOut { action, size_factor, reason, evidence };
+    out.validate()?;
+    Ok(out)
 }

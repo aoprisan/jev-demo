@@ -32,13 +32,14 @@ async fn no_state_ever_sent_to_a_backend_carries_the_generators_regime() {
 }
 
 #[tokio::test]
-async fn the_context_block_does_not_name_the_true_regime_either() {
+async fn the_framing_does_not_name_the_true_regime_either() {
     let audit = Arc::new(Audit::new());
     let jev = Jev::with_audit(Arc::new(MockJev::new()), audit.clone());
     let world = FxWorld::generate(DEFAULT_SEED, 12);
     run_session(&jev, &world, &StrategyParams::default(), None).await.unwrap();
 
-    // The context block is prose, so this checks the phrasing rather than a key.
+    // The framing under `context` is prose, so this checks the phrasing rather
+    // than a key, over the whole record.
     for record in audit.records() {
         let rendered = serde_json::to_string(&record).unwrap();
         for key in FORBIDDEN_KEYS {
@@ -70,12 +71,16 @@ fn the_decision_input_type_has_no_field_that_could_carry_truth() {
     for expected in [
         "hours_to_event",
         "stop_atr_multiple",
+        "stop_clears_noise",
         "trend_strength",
         "pre_trade_exposure_share",
         "post_trade_exposure_share",
     ] {
         assert!(keys.iter().any(|k| k == expected), "missing observable `{expected}`");
     }
+    // The generator labels each headline `informative`; the text goes, the
+    // label and any count of it do not.
+    assert!(!keys.iter().any(|k| k.contains("informative")), "a headline label leaked");
 }
 
 fn collect_keys(value: &serde_json::Value, out: &mut Vec<String>) {

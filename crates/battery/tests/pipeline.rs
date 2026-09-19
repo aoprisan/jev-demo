@@ -14,16 +14,32 @@ fn world(days: u32) -> BatteryWorld {
 }
 
 #[tokio::test]
-async fn the_stages_run_in_the_order_the_brief_names() {
+async fn the_stages_run_in_the_order_the_brief_names_in_three_calls() {
     let audit = Arc::new(Audit::new());
     let jev = Jev::with_audit(Arc::new(MockJev::new()), audit.clone());
     judge_day(&jev, &world(20), 14).await.unwrap();
 
-    let stages: Vec<String> = audit.records().iter().map(|r| r.stage.clone().unwrap()).collect();
-    assert_eq!(stages, vec!["regime", "rank", "sanity", "risk", "gate"]);
+    let records = audit.records();
+    let stages: Vec<String> = records.iter().map(|r| r.stage.clone().unwrap()).collect();
+    assert_eq!(stages, vec!["read", "assess", "gate"]);
 
-    let primitives: Vec<&str> = audit.records().iter().map(|r| r.primitive.as_str()).collect();
-    assert_eq!(primitives, vec!["classify", "rank", "check", "score", "gate"]);
+    let primitives: Vec<&str> = records.iter().map(|r| r.primitive.as_str()).collect();
+    assert_eq!(primitives, vec!["batch", "batch", "gate"]);
+
+    // Each batched call lists the stages it carried, in the brief's order.
+    let listed = |i: usize| -> Vec<String> {
+        records[i]
+            .output
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| {
+                format!("{}/{}", e["stage"].as_str().unwrap(), e["primitive"].as_str().unwrap())
+            })
+            .collect()
+    };
+    assert_eq!(listed(0), vec!["regime/classify", "rank/rank"]);
+    assert_eq!(listed(1), vec!["sanity/check", "risk/score"]);
 }
 
 #[tokio::test]
@@ -41,9 +57,8 @@ async fn the_checks_judge_the_schedule_the_ranking_chose() {
         records[i].state["input"]["features"]["under_consideration"].as_str().unwrap().to_owned()
     };
     assert_eq!(under(0), "balanced", "the ranking is asked about the default day");
-    assert_eq!(under(1), "balanced");
-    assert_eq!(under(2), record.judgment.chosen.as_str(), "checks follow the winner");
-    assert_eq!(under(4), record.judgment.chosen.as_str(), "so does the gate");
+    assert_eq!(under(1), record.judgment.chosen.as_str(), "checks follow the winner");
+    assert_eq!(under(2), record.judgment.chosen.as_str(), "so does the gate");
 }
 
 #[tokio::test]
@@ -137,7 +152,7 @@ async fn every_day_produces_a_complete_audit_trail() {
     let jev = Jev::with_audit(Arc::new(MockJev::new()), audit.clone());
     let session = run_session(&jev, &world(10), None).await.unwrap();
 
-    assert_eq!(audit.len(), session.days.len() * 5, "five primitive calls per day");
+    assert_eq!(audit.len(), session.days.len() * 3, "three calls per day");
     for record in audit.records() {
         assert!(!record.asks.is_empty());
         assert_eq!(record.verdicts.len(), record.asks.len());

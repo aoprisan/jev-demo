@@ -17,14 +17,14 @@
 //! schema did not already carry, which is the point: the prose is a rendering
 //! of the decision, not a second, unchecked channel of it.
 
-mod check;
-mod classify;
-mod explain;
-mod gate;
-mod rank;
-mod score;
+pub(crate) mod check;
+pub(crate) mod classify;
+pub(crate) mod explain;
+pub(crate) mod gate;
+pub(crate) mod rank;
+pub(crate) mod score;
 
-pub use check::{Check, CheckItem, CheckOut, CheckResult, CheckSpec};
+pub use check::{Check, CheckItem, CheckOut, CheckResult, CheckSource, CheckSpec};
 pub use classify::{Classify, ClassifyOut, ClassifySpec, Label};
 pub use explain::{Audience, Explain, ExplainOut, ExplainSpec, FactSpec, Framing};
 pub use gate::{Action, Gate, GateOut, GateSpec};
@@ -45,11 +45,14 @@ use serde::{Deserialize, Serialize};
 /// ground truth (a synthetic generator's true regime, a future price) would
 /// quietly invalidate any comparison drawn against it.
 pub trait JevInput: Serialize + Send + Sync {
-    /// Domain framing for this call, injected into the primitive's prompt as a
-    /// context block rather than replacing it.
+    /// Domain framing for this call: which solver produced the proposal and
+    /// what it may not change, in a sentence or two. It becomes the state's
+    /// `context` field. Keep it to facts the input's own fields do not already
+    /// carry; a number restated here is a number the model reads twice, and
+    /// an instruction here is one the model was not asked.
     fn context_block(&self) -> String;
 
-    /// The state as Jev sees it.
+    /// The state as Jev sees it, before the framing is added.
     ///
     /// Always `{"input": …, "prior_judgments": […]}`, whether or not the call
     /// came through a [`crate::Pipeline`], so that everything reading a state —

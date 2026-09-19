@@ -80,6 +80,12 @@ impl FxSession {
         self.count_action(Action::Escalate)
     }
 
+    /// How many the review policy flagged for a second look, on the certainty
+    /// behind the judgments rather than on the gate's verdict.
+    pub fn reviews(&self) -> usize {
+        self.decisions.iter().filter(|d| d.judgment.review.is_some()).count()
+    }
+
     /// Score one named check against what actually happened.
     ///
     /// This is the point of a typed, logged judgment layer: every named
@@ -275,13 +281,13 @@ pub fn build_input(
     params: &StrategyParams,
     book: &[synth::Exposure],
 ) -> FxDecisionInput {
+    // The headline text is observable; the generator's `informative` flag on
+    // each one is not, and nothing here counts it.
     let headlines: Vec<String> =
         world.headlines_on(candidate.t.day).iter().map(|h| h.text.clone()).collect();
-    let informative =
-        world.headlines_on(candidate.t.day).iter().filter(|h| h.informative).count() as u32;
 
     FxDecisionInput {
-        features: FxFeatures::compute(candidate, bars, &world.calendar, book, informative, params),
+        features: FxFeatures::compute(candidate, bars, &world.calendar, book, params),
         candidate: CandidateView::of(candidate, world.start),
         headlines,
     }
@@ -332,18 +338,17 @@ pub fn replay_decision<'a>(
     };
     let on_a_cpi_day = |d: &&DecisionRecord| cpi_days.contains(&d.candidate.t.day);
 
+    let hours = |d: &DecisionRecord| features(d).hours_to_event.unwrap_or(f64::INFINITY);
+
     decisions
         .iter()
         .filter(on_a_cpi_day)
         .filter(|d| {
             let f = features(d);
-            f.hours_to_event <= 3.0 && f.stop_atr_multiple < 1.2
+            f.hours_to_event.is_some_and(|h| h <= 3.0) && !f.stop_clears_noise
         })
-        .min_by(|a, b| features(a).hours_to_event.total_cmp(&features(b).hours_to_event))
+        .min_by(|a, b| hours(a).total_cmp(&hours(b)))
         .or_else(|| {
-            decisions
-                .iter()
-                .filter(on_a_cpi_day)
-                .min_by(|a, b| features(a).hours_to_event.total_cmp(&features(b).hours_to_event))
+            decisions.iter().filter(on_a_cpi_day).min_by(|a, b| hours(a).total_cmp(&hours(b)))
         })
 }

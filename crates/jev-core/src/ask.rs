@@ -6,6 +6,13 @@
 //! probability-weighted position on an ordered rubric). Every primitive in this
 //! crate is built out of those three.
 //!
+//! Instructions are JSON, not prose. System One reads a question's
+//! `instructions` as the judgment to make, and accepts an object there, so each
+//! primitive composes one from the caller's question plus its own standing
+//! guidance (`prompts/<primitive>.json`) — named fields such as `what`,
+//! `not_for` and `evidence` rather than a paragraph the model would have to
+//! parse. Nothing instruction-like goes into the state.
+//!
 //! These types mirror the SDK's rather than re-export it, for two reasons: the
 //! SDK's answer structs are `#[non_exhaustive]` and so cannot be constructed by
 //! a mock outside their crate, and keeping our own vocabulary lets `jev-core`'s
@@ -13,6 +20,7 @@
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::BTreeMap;
 
 /// One question put to Jev.
@@ -21,8 +29,8 @@ use std::collections::BTreeMap;
 pub enum Ask {
     /// Yes/no; answered with a probability.
     Noul {
-        /// What is being asserted.
-        instructions: String,
+        /// What is being asserted: a string, or an object of named parts.
+        instructions: Value,
         /// What a yes means.
         #[serde(skip_serializing_if = "Option::is_none")]
         yes: Option<String>,
@@ -32,15 +40,15 @@ pub enum Ask {
     },
     /// One of N labels; answered with a label and the full distribution.
     Choice {
-        /// What is being decided.
-        instructions: String,
+        /// What is being decided: a string, or an object of named parts.
+        instructions: Value,
         /// Label -> description, in offer order.
         options: Vec<(String, String)>,
     },
     /// A position on an ordered rubric; answered with a weighted level.
     Score {
-        /// What is being rated.
-        instructions: String,
+        /// What is being rated: a string, or an object of named parts.
+        instructions: Value,
         /// Ordered level descriptions, lowest first.
         levels: Vec<String>,
     },
@@ -48,7 +56,7 @@ pub enum Ask {
 
 impl Ask {
     /// A yes/no question.
-    pub fn noul(instructions: impl Into<String>) -> Self {
+    pub fn noul(instructions: impl Into<Value>) -> Self {
         Ask::Noul { instructions: instructions.into(), yes: None, no: None }
     }
 
@@ -62,7 +70,7 @@ impl Ask {
     }
 
     /// A choice between described labels.
-    pub fn choice<I, A, B>(instructions: impl Into<String>, options: I) -> Self
+    pub fn choice<I, A, B>(instructions: impl Into<Value>, options: I) -> Self
     where
         I: IntoIterator<Item = (A, B)>,
         A: Into<String>,
@@ -75,7 +83,7 @@ impl Ask {
     }
 
     /// A score over ordered levels, lowest first.
-    pub fn score<I, S>(instructions: impl Into<String>, levels: I) -> Self
+    pub fn score<I, S>(instructions: impl Into<Value>, levels: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
@@ -92,6 +100,24 @@ impl Ask {
             Ask::Noul { .. } => "noul",
             Ask::Choice { .. } => "choice",
             Ask::Score { .. } => "score",
+        }
+    }
+
+    /// The instructions, whatever their shape.
+    pub fn instructions(&self) -> &Value {
+        match self {
+            Ask::Noul { instructions, .. }
+            | Ask::Choice { instructions, .. }
+            | Ask::Score { instructions, .. } => instructions,
+        }
+    }
+
+    /// The `question` field of structured instructions, or the whole string.
+    pub fn question(&self) -> Option<&str> {
+        match self.instructions() {
+            Value::String(s) => Some(s),
+            Value::Object(o) => o.get("question").and_then(Value::as_str),
+            _ => None,
         }
     }
 }
@@ -242,5 +268,106 @@ impl Usage {
     /// Input + output, treating unreported counts as zero.
     pub fn total(&self) -> u64 {
         self.input_tokens.unwrap_or(0) + self.output_tokens.unwrap_or(0)
+    }
+}
+
+/// How far a distribution may stray from summing to one. The API reports
+/// probabilities rounded to a few decimals, so a three-way split can arrive
+/// as 0.333 + 0.333 + 0.333; that is rounding, not a malformed answer.
+const SUM_TOLERANCE: f64 = 0.01;
+/// How far a reported `score` may sit from the weighted sum of the rounded
+/// levels it came with, in levels.
+const SCORE_TOLERANCE: f64 = 0.05;
+
+impl Verdict {
+    /// Fill in levels the answer left out of a Score distribution as zero mass,
+    /// so a service that omits empty levels is not read as a malformed reply.
+    /// Only levels the rubric offered are added; anything else is left for
+    /// [`Verdict::validate_for`] to reject.
+    pub(crate) fn fill_missing_levels(&mut self, ask: &Ask) {
+        if let (Verdict::Score { probabilities, .. }, Ask::Score { levels, .. }) = (self, ask) {
+            for level in 0..levels.len() as u32 {
+                probabilities.entry(level).or_insert(0.0);
+            }
+        }
+    }
+
+    /// Validate the complete answer against the question before composition.
+    pub(crate) fn validate_for(
+        &self,
+        ask: &Ask,
+        name: &str,
+        primitive: &'static str,
+    ) -> crate::error::Result<()> {
+        use crate::error::JevError;
+        use crate::primitives::in_range;
+        let invalid = |detail: &str| JevError::Contradiction {
+            primitive,
+            detail: format!("{name}: {detail}"),
+        };
+        let distribution = |values: Vec<f64>| -> crate::error::Result<()> {
+            for p in &values {
+                in_range(primitive, "probability", *p, 0.0, 1.0)?;
+            }
+            if (values.iter().sum::<f64>() - 1.0).abs() > SUM_TOLERANCE {
+                return Err(invalid("probabilities must sum to one"));
+            }
+            Ok(())
+        };
+        match (self, ask) {
+            (Verdict::Noul { p }, Ask::Noul { .. }) => {
+                in_range(primitive, "probability", *p, 0.0, 1.0)
+            }
+            (Verdict::Choice { label, probabilities, confidence }, Ask::Choice { options, .. }) => {
+                if !options.iter().any(|(key, _)| key == label) {
+                    return Err(JevError::UnknownLabel {
+                        primitive,
+                        label: label.clone(),
+                        allowed: options
+                            .iter()
+                            .map(|(key, _)| key.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    });
+                }
+                in_range(primitive, "confidence", *confidence, 0.0, 1.0)?;
+                if probabilities.len() != options.len()
+                    || options.iter().any(|(key, _)| !probabilities.contains_key(key))
+                {
+                    return Err(invalid("distribution must contain exactly the offered options"));
+                }
+                distribution(probabilities.values().copied().collect())?;
+                if probabilities.values().any(|p| *p > probabilities[label] + SUM_TOLERANCE) {
+                    return Err(invalid("selected label is not a highest-probability option"));
+                }
+                Ok(())
+            }
+            (
+                Verdict::Score { score, levels, probabilities, confidence },
+                Ask::Score { levels: offered, .. },
+            ) => {
+                in_range(primitive, "confidence", *confidence, 0.0, 1.0)?;
+                if *levels != offered.len()
+                    || *levels < 2
+                    || probabilities.len() != *levels
+                    || (0..*levels).any(|i| !probabilities.contains_key(&(i as u32)))
+                {
+                    return Err(invalid("distribution must contain exactly the offered levels"));
+                }
+                in_range(primitive, "score", *score, 0.0, (*levels - 1) as f64)?;
+                distribution(probabilities.values().copied().collect())?;
+                let expected: f64 = probabilities.iter().map(|(i, p)| *i as f64 * p).sum();
+                if (*score - expected).abs() > SCORE_TOLERANCE {
+                    return Err(invalid("score disagrees with its probability-weighted levels"));
+                }
+                Ok(())
+            }
+            _ => Err(JevError::AnswerKind {
+                name: name.to_owned(),
+                primitive,
+                got: self.kind(),
+                want: ask.kind(),
+            }),
+        }
     }
 }

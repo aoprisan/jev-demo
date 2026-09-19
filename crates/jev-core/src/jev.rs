@@ -9,7 +9,6 @@ use crate::audit::Audit;
 use crate::client::{now_ms, CallRecord, JevCall, JevClient, JevReply, Primitive};
 use crate::error::{JevError, Result};
 use crate::primitives::JevInput;
-use crate::prompts;
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -76,28 +75,26 @@ impl Jev {
         if asks.is_empty() {
             return Err(JevError::InvalidCall(format!("{primitive} asked nothing")));
         }
-        let state = input.to_state()?;
-        let call = JevCall {
-            primitive,
-            instructions: prompts::for_primitive(primitive).to_owned(),
-            context: input.context_block(),
-            state,
-            asks,
-        };
-        let reply = self.client.ask(&call).await?;
-        for (name, _) in call.asks.iter() {
-            if !reply.verdicts.contains_key(name) {
+        let call = JevCall { primitive, state: state_of(input)?, asks };
+        let mut reply = self.client.ask(&call).await?;
+        for (name, ask) in call.asks.iter() {
+            let Some(verdict) = reply.verdicts.get_mut(name) else {
                 return Err(JevError::MissingAnswer {
                     name: name.to_owned(),
                     primitive: primitive.as_str(),
                     asked: call.asks.len(),
                 });
-            }
+            };
+            verdict.fill_missing_levels(ask);
+            verdict.validate_for(ask, name, primitive.as_str())?;
         }
         Ok(CallOutcome { call, reply })
     }
 
     /// Record a completed call together with the typed output it produced.
+    ///
+    /// For a [`Primitive::Batch`] call the output is the list of every stage's
+    /// `{stage, primitive, output}`, in the order they were asked.
     pub(crate) fn record<T: Serialize>(&self, outcome: &CallOutcome, output: &T) -> Result<()> {
         let output = serde_json::to_value(output)
             .map_err(|e| JevError::Audit(format!("output is not serialisable: {e}")))?;
@@ -116,4 +113,20 @@ impl Jev {
             latency_ms: outcome.reply.latency.as_millis() as u64,
         })
     }
+}
+
+/// The state of a call: the domain framing, the input and the priors, as one
+/// object. The framing is content about the situation (which solver proposed
+/// this, what it may not change), so it lives in the state under its own name;
+/// it is not a prompt.
+pub(crate) fn state_of<I: JevInput>(input: &I) -> Result<serde_json::Value> {
+    let mut state = input.to_state()?;
+    let context = input.context_block();
+    if let (Some(obj), false) = (state.as_object_mut(), context.is_empty()) {
+        let mut with_context = serde_json::Map::with_capacity(obj.len() + 1);
+        with_context.insert("context".to_owned(), serde_json::Value::String(context));
+        with_context.extend(std::mem::take(obj));
+        state = serde_json::Value::Object(with_context);
+    }
+    Ok(state)
 }

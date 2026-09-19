@@ -1,18 +1,26 @@
 //! Composing primitives into a pipeline.
 //!
-//! A domain runs e.g. `Classify(regime) -> Check(sanity) -> Score(risk) -> Gate`.
-//! Each stage's typed output is appended to the state of every later stage under
-//! `prior_judgments`, and rendered into the later stage's context block, so a
-//! gate can see that a check failed without the domain having to re-state it.
+//! A domain runs e.g. `[Classify(regime), Check(sanity), Score(risk)] -> Gate`.
+//! Stages that are independent of one another go into one [`Batch`]: their
+//! questions are fanned out in a single call, which System One answers in
+//! parallel at no extra latency. A stage that needs an earlier stage's answer
+//! goes in a later batch, and sees every earlier stage's typed output under
+//! `prior_judgments` in its state.
 
-use crate::error::Result;
+use crate::ask::Asks;
+use crate::client::{JevReply, Primitive};
+use crate::error::{JevError, Result};
 use crate::jev::Jev;
 use crate::primitives::{
-    Audience, Candidate, CandidateId, Check, CheckOut, CheckSpec, Classify, ClassifyOut,
-    ClassifySpec, Explain, ExplainOut, ExplainSpec, Gate, GateOut, GateSpec, JevInput, Label, Rank,
-    RankOut, RankSpec, Score, ScoreOut, ScoreSpec,
+    check, classify, explain, gate, rank, score, Candidate, CandidateId, CheckOut, CheckSpec,
+    ClassifyOut, ClassifySpec, ExplainOut, ExplainSpec, GateOut, GateSpec, JevInput, Label,
+    RankOut, RankSpec, ScoreOut, ScoreSpec,
 };
+use crate::Audience;
 use serde::Serialize;
+use serde_json::Value;
+use std::any::Any;
+use std::marker::PhantomData;
 
 /// One earlier stage's output, as later stages see it.
 #[derive(Debug, Clone, Serialize)]
@@ -22,8 +30,8 @@ pub struct PriorEntry {
     /// Which primitive.
     pub primitive: &'static str,
     /// The typed output, as JSON.
-    pub output: serde_json::Value,
-    /// A one-line rendering, used in the context block.
+    pub output: Value,
+    /// A one-line rendering, so a reader of the log has the gist next to the data.
     pub line: String,
 }
 
@@ -48,31 +56,8 @@ impl Priors {
         self.0.is_empty()
     }
 
-    fn push<T: Serialize>(
-        &mut self,
-        stage: &str,
-        primitive: &'static str,
-        output: &T,
-        line: String,
-    ) {
-        self.0.push(PriorEntry {
-            stage: stage.to_owned(),
-            primitive,
-            output: serde_json::to_value(output).unwrap_or(serde_json::Value::Null),
-            line,
-        });
-    }
-
-    /// The prior stages rendered for a context block.
-    pub fn render(&self) -> String {
-        if self.0.is_empty() {
-            return String::new();
-        }
-        let mut s = String::from("Earlier judgments in this decision:\n");
-        for e in &self.0 {
-            s.push_str(&format!("- [{}/{}] {}\n", e.stage, e.primitive, e.line));
-        }
-        s
+    fn push(&mut self, stage: &str, primitive: &'static str, output: Value, line: String) {
+        self.0.push(PriorEntry { stage: stage.to_owned(), primitive, output, line });
     }
 }
 
@@ -97,29 +82,23 @@ impl<I: Serialize> Serialize for Staged<'_, I> {
 }
 
 impl<I: JevInput> JevInput for Staged<'_, I> {
-    fn to_state(&self) -> Result<serde_json::Value> {
+    fn to_state(&self) -> Result<Value> {
         Ok(serde_json::json!({
             "input": serde_json::to_value(self.inner)
-                .map_err(|e| crate::error::JevError::InvalidCall(e.to_string()))?,
+                .map_err(|e| JevError::InvalidCall(e.to_string()))?,
             "prior_judgments": self.priors,
         }))
     }
 
     fn context_block(&self) -> String {
-        let base = self.inner.context_block();
-        let priors = self.priors.render();
-        if priors.is_empty() {
-            base
-        } else {
-            format!("{base}\n\n{priors}")
-        }
+        self.inner.context_block()
     }
 }
 
 /// A sequence of primitive calls that share one accumulating set of prior outputs.
 ///
-/// Each method tags its call with the stage name, so `decisions.jsonl` shows the
-/// pipeline shape as well as the individual calls.
+/// Each single-stage method is a batch of one. Use [`Pipeline::batch`] to fan
+/// several independent stages into one call.
 pub struct Pipeline {
     jev: Jev,
     name: String,
@@ -147,92 +126,295 @@ impl Pipeline {
         self.priors = Priors::new();
     }
 
-    /// Run a `Classify` stage.
+    /// Start a batch of independent stages over `input`, tagged `stage` in the
+    /// audit log. Every stage added sees the priors as they stand now, and
+    /// none sees another stage in the same batch.
+    pub fn batch<'p, 'i, I: JevInput>(&'p mut self, stage: &str, input: &'i I) -> Batch<'p, 'i, I> {
+        Batch { pipeline: self, stage: stage.to_owned(), input, items: Vec::new() }
+    }
+
+    /// Run a `Classify` stage on its own.
     pub async fn classify<I: JevInput, E: Label + Serialize>(
         &mut self,
         stage: &str,
         input: &I,
         spec: &ClassifySpec,
     ) -> Result<ClassifyOut<E>> {
-        let staged = Staged { inner: input, priors: &self.priors };
-        let out: ClassifyOut<E> =
-            Classify::<_, E>::classify(&self.jev.staged(stage), &staged, spec).await?;
-        self.priors.push(stage, "classify", &out, out.reason.clone());
-        Ok(out)
+        let mut batch = self.batch(stage, input);
+        let slot = batch.classify::<E>(stage, spec)?;
+        batch.send().await?.take(slot)
     }
 
-    /// Run a `Check` stage.
+    /// Run a `Check` stage on its own.
     pub async fn check<I: JevInput>(
         &mut self,
         stage: &str,
         input: &I,
         spec: &CheckSpec,
     ) -> Result<CheckOut> {
-        let staged = Staged { inner: input, priors: &self.priors };
-        let out = Check::check(&self.jev.staged(stage), &staged, spec).await?;
-        let line = if out.all_ok() {
-            format!("all {} checks hold", out.checks.len())
-        } else {
-            format!("failed: {}", out.failed().join(", "))
-        };
-        self.priors.push(stage, "check", &out, line);
-        Ok(out)
+        let mut batch = self.batch(stage, input);
+        let slot = batch.check(stage, spec)?;
+        batch.send().await?.take(slot)
     }
 
-    /// Run a `Score` stage.
+    /// Run a `Score` stage on its own.
     pub async fn score<I: JevInput>(
         &mut self,
         stage: &str,
         input: &I,
         spec: &ScoreSpec,
     ) -> Result<ScoreOut> {
-        let staged = Staged { inner: input, priors: &self.priors };
-        let out = Score::score(&self.jev.staged(stage), &staged, spec).await?;
-        self.priors.push(stage, "score", &out, out.reason.clone());
-        Ok(out)
+        let mut batch = self.batch(stage, input);
+        let slot = batch.score(stage, spec)?;
+        batch.send().await?.take(slot)
     }
 
-    /// Run a `Rank` stage.
+    /// Run a `Rank` stage on its own.
     pub async fn rank<I: JevInput, T: CandidateId + Serialize>(
         &mut self,
         stage: &str,
         input: &I,
         spec: &RankSpec<T>,
     ) -> Result<RankOut<T>> {
-        let staged = Staged { inner: input, priors: &self.priors };
-        let out: RankOut<T> = Rank::<_, T>::rank(&self.jev.staged(stage), &staged, spec).await?;
-        let line = match out.top() {
-            Some(top) => format!("{} first (margin {:.2})", top.id.label(), out.margin()),
-            None => "no candidates".to_owned(),
-        };
-        self.priors.push(stage, "rank", &out, line);
-        Ok(out)
+        let mut batch = self.batch(stage, input);
+        let slot = batch.rank(stage, spec)?;
+        batch.send().await?.take(slot)
     }
 
-    /// Run a `Gate` stage.
+    /// Run a `Gate` stage on its own.
     pub async fn gate<I: JevInput>(
         &mut self,
         stage: &str,
         input: &I,
         spec: &GateSpec,
     ) -> Result<GateOut> {
-        let staged = Staged { inner: input, priors: &self.priors };
-        let out = Gate::gate(&self.jev.staged(stage), &staged, spec).await?;
-        self.priors.push(stage, "gate", &out, out.reason.clone());
-        Ok(out)
+        let mut batch = self.batch(stage, input);
+        let slot = batch.gate(stage, spec)?;
+        batch.send().await?.take(slot)
     }
 
-    /// Run an `Explain` stage.
+    /// Run an `Explain` stage on its own.
     pub async fn explain<I: JevInput>(
         &mut self,
         stage: &str,
         input: &I,
         spec: &ExplainSpec,
     ) -> Result<ExplainOut> {
-        let staged = Staged { inner: input, priors: &self.priors };
-        let out = Explain::explain(&self.jev.staged(stage), &staged, spec).await?;
-        self.priors.push(stage, "explain", &out, out.summary.clone());
-        Ok(out)
+        let mut batch = self.batch(stage, input);
+        let slot = batch.explain(stage, spec)?;
+        batch.send().await?.take(slot)
+    }
+}
+
+// ---- batching ------------------------------------------------------------------------------
+
+/// What one stage in a batch produced, before it is handed back typed.
+struct Composed {
+    typed: Box<dyn Any + Send>,
+    json: Value,
+    line: String,
+}
+
+/// Compose one stage's output from the reply, the state that was judged and
+/// the prefix its asks were sent under.
+type Compose = Box<dyn FnOnce(&JevReply, &Value, &str) -> Result<Composed> + Send>;
+
+struct Item {
+    stage: String,
+    primitive: Primitive,
+    asks: Asks,
+    compose: Compose,
+}
+
+/// A typed handle to one stage's output in a [`BatchOut`].
+#[derive(Debug)]
+pub struct Slot<T> {
+    index: usize,
+    stage: String,
+    _out: PhantomData<fn() -> T>,
+}
+
+/// Several independent stages, asked in one call.
+///
+/// Add stages with the primitive-named methods, each returning a [`Slot`];
+/// [`Batch::send`] makes the call, composes every stage's typed output,
+/// appends each to the pipeline's priors in the order added, and records one
+/// audit line for the call. In a batch of more than one, every ask is named
+/// `<stage>.<ask>` so two stages' `level`s cannot collide; a batch of one
+/// keeps bare names and is recorded under its own primitive.
+pub struct Batch<'p, 'i, I> {
+    pipeline: &'p mut Pipeline,
+    stage: String,
+    input: &'i I,
+    items: Vec<Item>,
+}
+
+/// The outputs of a sent batch, claimed one slot at a time.
+pub struct BatchOut {
+    outputs: Vec<Option<Composed>>,
+}
+
+impl BatchOut {
+    /// Take the typed output for `slot`.
+    pub fn take<T: 'static>(&mut self, slot: Slot<T>) -> Result<T> {
+        let composed =
+            self.outputs.get_mut(slot.index).and_then(Option::take).ok_or_else(|| {
+                JevError::InvalidCall(format!("stage `{}` was not in this batch", slot.stage))
+            })?;
+        composed.typed.downcast::<T>().map(|b| *b).map_err(|_| {
+            JevError::InvalidCall(format!("stage `{}` is not the type asked for", slot.stage))
+        })
+    }
+}
+
+impl<I: JevInput> Batch<'_, '_, I> {
+    fn add<T, F>(&mut self, stage: &str, primitive: Primitive, asks: Asks, compose: F) -> Slot<T>
+    where
+        T: Serialize + Send + 'static,
+        F: FnOnce(&JevReply, &Value, &str) -> Result<(T, String)> + Send + 'static,
+    {
+        let index = self.items.len();
+        self.items.push(Item {
+            stage: stage.to_owned(),
+            primitive,
+            asks,
+            compose: Box::new(move |reply, state, prefix| {
+                let (out, line) = compose(reply, state, prefix)?;
+                let json = serde_json::to_value(&out)
+                    .map_err(|e| JevError::Audit(format!("output is not serialisable: {e}")))?;
+                Ok(Composed { typed: Box::new(out), json, line })
+            }),
+        });
+        Slot { index, stage: stage.to_owned(), _out: PhantomData }
+    }
+
+    /// Add a `Classify` stage.
+    pub fn classify<E: Label + Serialize>(
+        &mut self,
+        stage: &str,
+        spec: &ClassifySpec,
+    ) -> Result<Slot<ClassifyOut<E>>> {
+        let asks = classify::asks::<E>(spec, "")?;
+        let spec = spec.clone();
+        Ok(self.add(stage, Primitive::Classify, asks, move |reply, _, prefix| {
+            let out = classify::compose::<E>(&spec, reply, prefix)?;
+            let line = out.line();
+            Ok((out, line))
+        }))
+    }
+
+    /// Add a `Check` stage.
+    pub fn check(&mut self, stage: &str, spec: &CheckSpec) -> Result<Slot<CheckOut>> {
+        let asks = check::asks(spec, "")?;
+        let spec = spec.clone();
+        Ok(self.add(stage, Primitive::Check, asks, move |reply, _, prefix| {
+            let out = check::compose(&spec, reply, prefix)?;
+            let line = out.line();
+            Ok((out, line))
+        }))
+    }
+
+    /// Add a `Score` stage.
+    pub fn score(&mut self, stage: &str, spec: &ScoreSpec) -> Result<Slot<ScoreOut>> {
+        let asks = score::asks(spec, "")?;
+        let spec = spec.clone();
+        Ok(self.add(stage, Primitive::Score, asks, move |reply, _, prefix| {
+            let out = score::compose(&spec, reply, prefix)?;
+            let line = out.line();
+            Ok((out, line))
+        }))
+    }
+
+    /// Add a `Rank` stage.
+    pub fn rank<T: CandidateId + Serialize>(
+        &mut self,
+        stage: &str,
+        spec: &RankSpec<T>,
+    ) -> Result<Slot<RankOut<T>>> {
+        let asks = rank::asks(spec, "")?;
+        let spec = spec.clone();
+        Ok(self.add(stage, Primitive::Rank, asks, move |reply, _, prefix| {
+            let out = rank::compose(&spec, reply, prefix)?;
+            let line = out.line();
+            Ok((out, line))
+        }))
+    }
+
+    /// Add a `Gate` stage.
+    pub fn gate(&mut self, stage: &str, spec: &GateSpec) -> Result<Slot<GateOut>> {
+        let asks = gate::asks(spec, "")?;
+        let spec = spec.clone();
+        Ok(self.add(stage, Primitive::Gate, asks, move |reply, state, prefix| {
+            let out = gate::compose(&spec, reply, state, prefix)?;
+            let line = out.line();
+            Ok((out, line))
+        }))
+    }
+
+    /// Add an `Explain` stage.
+    pub fn explain(&mut self, stage: &str, spec: &ExplainSpec) -> Result<Slot<ExplainOut>> {
+        let asks = explain::asks(spec, "")?;
+        let spec = spec.clone();
+        Ok(self.add(stage, Primitive::Explain, asks, move |reply, _, prefix| {
+            let out = explain::compose(&spec, reply, prefix)?;
+            let line = out.line();
+            Ok((out, line))
+        }))
+    }
+
+    /// Make the call, compose every stage, extend the priors, record the call.
+    pub async fn send(self) -> Result<BatchOut> {
+        if self.items.is_empty() {
+            return Err(JevError::InvalidCall(format!("batch `{}` has no stages", self.stage)));
+        }
+        let single = self.items.len() == 1;
+        let primitive = if single { self.items[0].primitive } else { Primitive::Batch };
+        let prefix = |stage: &str| if single { String::new() } else { format!("{stage}.") };
+
+        let mut asks = Asks::new();
+        for item in &self.items {
+            let prefix = prefix(&item.stage);
+            for (name, ask) in item.asks.iter() {
+                let full = format!("{prefix}{name}");
+                if asks.get(&full).is_some() {
+                    return Err(JevError::InvalidCall(format!(
+                        "batch `{}` asks `{full}` twice",
+                        self.stage
+                    )));
+                }
+                asks = asks.with(full, ask.clone());
+            }
+        }
+
+        let jev = self.pipeline.jev.staged(&self.stage);
+        let staged = Staged { inner: self.input, priors: &self.pipeline.priors };
+        let outcome = jev.call(primitive, &staged, asks).await?;
+
+        let mut outputs = Vec::with_capacity(self.items.len());
+        let mut recorded = Vec::with_capacity(self.items.len());
+        for item in self.items {
+            let composed =
+                (item.compose)(&outcome.reply, &outcome.call.state, &prefix(&item.stage))?;
+            self.pipeline.priors.push(
+                &item.stage,
+                item.primitive.as_str(),
+                composed.json.clone(),
+                composed.line.clone(),
+            );
+            recorded.push(serde_json::json!({
+                "stage": item.stage,
+                "primitive": item.primitive.as_str(),
+                "output": composed.json,
+            }));
+            outputs.push(Some(composed));
+        }
+
+        if single {
+            jev.record(&outcome, &recorded[0]["output"])?;
+        } else {
+            jev.record(&outcome, &recorded)?;
+        }
+        Ok(BatchOut { outputs })
     }
 }
 

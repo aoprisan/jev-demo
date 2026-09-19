@@ -129,7 +129,7 @@ pub async fn battery_notice_day(jev: &Jev, world: &BatteryWorld, cli: &Cli) -> R
             .ordered
             .iter()
             .enumerate()
-            .map(|(i, x)| format!("{}. {} ({:.2})", i + 1, x.id.as_str(), x.p))
+            .map(|(i, x)| format!("{}. {} (fit {:.2})", i + 1, x.id.as_str(), x.fit))
             .collect()
     };
     let quiet_order = order(&quiet);

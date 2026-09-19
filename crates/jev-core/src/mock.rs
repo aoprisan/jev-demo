@@ -2,10 +2,10 @@
 //!
 //! # What the mock may look at
 //!
-//! The mock sees exactly what the live API sees: the serialised state, the
-//! context block and the questions. It reads **observable features only** —
-//! whatever the domain chose to put under `input.features` — and it has no
-//! access to any ground truth a synthetic generator holds back. That is what
+//! The mock sees exactly what the live API sees: the serialised state and the
+//! questions. It reads **observable features only** — whatever the domain
+//! chose to put under `input.features` — and it has no access to any ground
+//! truth a synthetic generator holds back. That is what
 //! keeps the gated-vs-ungated P&L comparison honest: the mock is judging the
 //! same information a live model would.
 //!
@@ -16,11 +16,18 @@
 //! itself an empirical result rather than a guarantee. `tests/honesty.rs`
 //! asserts that no state ever handed to a backend carries the true regime.
 //!
+//! Rule checks (`stop_sane`, `reserve_ok`, `cycle_budget_ok`) never reach a
+//! backend: the domain evaluates them in code and the mock reads only their
+//! outcome, as a flag in the features, where a driver needs it.
+//!
 //! # Determinism
 //!
 //! Answers are a pure function of the call. Where no rule applies, a
 //! deterministic hash of the call and question name supplies a stable,
 //! middling probability, so a run is reproducible without being informative.
+//!
+//! Questions arrive as `<stage>.<name>` from a batched call and as `<name>`
+//! from a single one; the rules key on the bare name either way.
 
 use crate::ask::{Ask, Usage, Verdict};
 use crate::client::{JevCall, JevClient, JevReply};
@@ -35,8 +42,6 @@ use std::time::Duration;
 pub mod thresholds {
     /// FX: an event this close counts as imminent (hours).
     pub const EVENT_IMMINENT_HOURS: f64 = 3.0;
-    /// FX: a stop tighter than this multiple of ATR is not sane.
-    pub const STOP_ATR_MULTIPLE: f64 = 1.2;
     /// FX: above this directional persistence the window reads as trending,
     /// where a mean-reversion signal is not valid.
     pub const TRENDING_STRENGTH: f64 = 0.62;
@@ -48,8 +53,6 @@ pub mod thresholds {
     pub const EXPOSURE_SHARE_CAP: f64 = 0.35;
     /// Battery: intraday deviation beyond this multiple of recent sigma is implausible.
     pub const ID_DEVIATION_SIGMA: f64 = 2.0;
-    /// Battery: within this fraction of the cycle budget counts as "near".
-    pub const CYCLE_BUDGET_NEAR: f64 = 0.85;
 }
 
 /// The offline, rule-based Jev backend.
@@ -80,12 +83,12 @@ impl JevClient for MockJev {
         let f = Features::of(&call.state);
         let mut verdicts = IndexMap::with_capacity(call.asks.len());
         for (name, ask) in call.asks.iter() {
-            verdicts.insert(name.to_owned(), answer(name, ask, &f, call));
+            verdicts.insert(name.to_owned(), answer(bare(name), ask, &f, call));
         }
         // Token counts are proportional to what was sent, so the reported cost
         // moves with the size of a call the way a live one would.
-        let input_tokens =
-            (call.instructions.len() + call.context.len() + call.state.to_string().len()) / 4;
+        let asks_len = serde_json::to_string(&call.asks).map(|s| s.len()).unwrap_or(0);
+        let input_tokens = (asks_len + call.state.to_string().len()) / 4;
         let output_tokens = 12 * call.asks.len();
         Ok(JevReply {
             verdicts,
@@ -97,6 +100,11 @@ impl JevClient for MockJev {
             latency: self.latency,
         })
     }
+}
+
+/// The question name without its batch stage prefix.
+fn bare(name: &str) -> &str {
+    name.rsplit('.').next().unwrap_or(name)
 }
 
 // ---- observable features -------------------------------------------------------------------
@@ -148,14 +156,6 @@ fn prior_check_failed(call: &JevCall, name: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn prior_any_check_failed(call: &JevCall) -> bool {
-    prior(call, "check")
-        .and_then(|o| o.get("checks"))
-        .and_then(Value::as_array)
-        .map(|checks| checks.iter().any(|c| c.get("ok").and_then(Value::as_bool) == Some(false)))
-        .unwrap_or(false)
-}
-
 fn prior_score(call: &JevCall) -> Option<u64> {
     prior(call, "score")?.get("score")?.as_u64()
 }
@@ -166,17 +166,18 @@ fn prior_label(call: &JevCall) -> Option<&str> {
 
 // ---- derived observations ------------------------------------------------------------------
 
+/// FX: the stop is tighter than the window's own movement. The domain decides
+/// the threshold and publishes the outcome; the mock reads the flag.
+fn fx_stop_tight(f: &Features) -> bool {
+    f.flag("stop_clears_noise").map(|clears| !clears).unwrap_or(false)
+}
+
 /// FX: a scheduled event is imminent and the stop is tighter than the volatility
 /// of the window justifies. Both halves are required, per the rule.
 fn fx_event_pins_a_tight_stop(f: &Features) -> bool {
-    let hours = f.num("hours_to_event");
-    let stop_atr = f.num("stop_atr_multiple");
-    match (hours, stop_atr) {
-        (Some(h), Some(s)) => {
-            (0.0..=thresholds::EVENT_IMMINENT_HOURS).contains(&h)
-                && s < thresholds::STOP_ATR_MULTIPLE
-        }
-        _ => false,
+    match f.num("hours_to_event") {
+        Some(h) => (0.0..=thresholds::EVENT_IMMINENT_HOURS).contains(&h) && fx_stop_tight(f),
+        None => false,
     }
 }
 
@@ -203,10 +204,10 @@ fn battery_reserve_pressure(f: &Features) -> bool {
         || f.flag("grid_notice_overlaps_discharge").unwrap_or(false)
 }
 
-/// Battery: the schedule dips below the reserve floor inside the window.
+/// Battery: the schedule dips below the reserve floor inside the window. The
+/// domain's rule, read as the flag it publishes.
 fn battery_dips_below_reserve(f: &Features) -> bool {
-    f.flag("afrr_window_active").unwrap_or(false)
-        && f.flag("schedule_dips_below_reserve_soc").unwrap_or(false)
+    f.flag("reserve_breached").unwrap_or(false)
 }
 
 /// Battery: intraday has moved further from day-ahead than recent variation explains.
@@ -214,9 +215,22 @@ fn battery_id_deviation_implausible(f: &Features) -> bool {
     f.num("id_deviation_sigmas").map(|d| d.abs() > thresholds::ID_DEVIATION_SIGMA).unwrap_or(false)
 }
 
-/// Battery: the cycle budget is nearly spent.
+/// Battery: the cycle budget is nearly spent. The domain's rule, read as the
+/// flag it publishes.
 fn battery_cycles_near_budget(f: &Features) -> bool {
-    f.num("cycle_budget_used_fraction").map(|u| u >= thresholds::CYCLE_BUDGET_NEAR).unwrap_or(false)
+    f.flag("cycles_within_budget").map(|within| !within).unwrap_or(false)
+}
+
+/// Whether any of the domain's sanity checks fails on this state — the same
+/// conditions the check rules read, so the score can weigh them in a call
+/// that runs alongside the check rather than after it.
+fn any_check_fails(f: &Features) -> bool {
+    fx_stop_tight(f)
+        || fx_reads_trending(f)
+        || fx_exposure_doubles(f)
+        || battery_dips_below_reserve(f)
+        || battery_id_deviation_implausible(f)
+        || battery_cycles_near_budget(f)
 }
 
 // ---- answering -----------------------------------------------------------------------------
@@ -233,17 +247,7 @@ fn answer(name: &str, ask: &Ask, f: &Features, call: &JevCall) -> Verdict {
 fn noul(name: &str, f: &Features, call: &JevCall) -> f64 {
     let key = name.trim_start_matches("driver_").trim_start_matches("fact_");
     match key {
-        // --- forex checks ---
-        "stop_sane" => {
-            let stop_atr = f.num("stop_atr_multiple").unwrap_or(1.5);
-            if stop_atr >= thresholds::STOP_ATR_MULTIPLE {
-                0.92
-            } else if stop_atr >= 0.9 {
-                0.38
-            } else {
-                0.08
-            }
-        }
+        // --- forex checks (stop_sane is a rule in the fx crate) ---
         "signal_valid_in_regime" => {
             if fx_reads_trending(f) {
                 0.11
@@ -278,8 +282,7 @@ fn noul(name: &str, f: &Features, call: &JevCall) -> f64 {
             None => 0.06,
         },
         "tight_stop" => {
-            let stop_atr = f.num("stop_atr_multiple").unwrap_or(1.5);
-            if stop_atr < thresholds::STOP_ATR_MULTIPLE {
+            if fx_stop_tight(f) {
                 0.87
             } else {
                 0.12
@@ -296,30 +299,13 @@ fn noul(name: &str, f: &Features, call: &JevCall) -> f64 {
                 0.17
             }
         }
-        // --- battery checks ---
-        "reserve_ok" => {
-            if battery_dips_below_reserve(f) {
-                0.07
-            } else if battery_reserve_pressure(f) {
-                0.72
-            } else {
-                0.95
-            }
-        }
+        // --- battery checks (reserve_ok and cycle_budget_ok are rules in the battery crate) ---
         "margin_plausible" => {
             if battery_id_deviation_implausible(f) {
                 0.12
             } else {
                 let d = f.num("id_deviation_sigmas").map(f64::abs).unwrap_or(0.4);
                 (0.95 - 0.2 * d).clamp(0.5, 0.95)
-            }
-        }
-        "cycle_budget_ok" => {
-            if battery_cycles_near_budget(f) {
-                0.16
-            } else {
-                let u = f.num("cycle_budget_used_fraction").unwrap_or(0.3);
-                (0.97 - 0.5 * u).clamp(0.4, 0.97)
             }
         }
         // --- battery score drivers ---
@@ -364,7 +350,7 @@ fn noul(name: &str, f: &Features, call: &JevCall) -> f64 {
 }
 
 /// Explain's candidate facts. Which ones matter is a function of the audience,
-/// which the mock reads from the context block the primitive built.
+/// which the caller puts in the features.
 fn explain_fact(key: &str, f: &Features, call: &JevCall) -> Option<f64> {
     let audience = f.text("audience")?;
     let interventions = f.num("intervention_count").unwrap_or(0.0);
@@ -393,12 +379,11 @@ fn explain_fact(key: &str, f: &Features, call: &JevCall) -> Option<f64> {
     })
 }
 
-/// Choice rules: the gate's action, a classification, or a ranking.
+/// Choice rules: the gate's action, a classification, or a framing.
 fn choice(name: &str, options: &[(String, String)], f: &Features, call: &JevCall) -> Verdict {
     let labels: Vec<&str> = options.iter().map(|(l, _)| l.as_str()).collect();
     let weights: Vec<f64> = match name {
         "action" => gate_weights(&labels, f, call),
-        "best" => rank_weights(&labels, f),
         "label" => classify_weights(&labels, f),
         "framing" => framing_weights(&labels, f),
         _ => labels.iter().map(|l| stable(call, l, 0.2, 0.8)).collect(),
@@ -520,29 +505,27 @@ fn gate_weights(labels: &[&str], f: &Features, call: &JevCall) -> Vec<f64> {
         .collect()
 }
 
-/// Ranking. The reserve-heavy schedule leads whenever the reserve is under
-/// pressure; otherwise the balanced one does, with aggressive close behind.
-fn rank_weights(labels: &[&str], f: &Features) -> Vec<f64> {
+/// One candidate's fit, 0..=1 of the rubric. The reserve-heavy schedule leads
+/// whenever the reserve is under pressure; otherwise the balanced one does,
+/// with aggressive close behind.
+fn rank_fit(label: &str, f: &Features) -> f64 {
     let pressure = battery_reserve_pressure(f);
     let dislocated = battery_id_deviation_implausible(f);
-    labels
-        .iter()
-        .map(|l| match (*l, pressure) {
-            ("reserve_heavy", true) => 1.0,
-            ("reserve_heavy", false) => 0.28,
-            ("balanced", true) => 0.5,
-            ("balanced", false) => 1.0,
-            ("aggressive", true) => 0.12,
-            ("aggressive", false) => {
-                if dislocated {
-                    0.3
-                } else {
-                    0.72
-                }
+    match (label, pressure) {
+        ("reserve_heavy", true) => 1.0,
+        ("reserve_heavy", false) => 0.28,
+        ("balanced", true) => 0.5,
+        ("balanced", false) => 1.0,
+        ("aggressive", true) => 0.12,
+        ("aggressive", false) => {
+            if dislocated {
+                0.3
+            } else {
+                0.72
             }
-            _ => 0.4,
-        })
-        .collect()
+        }
+        _ => 0.4,
+    }
 }
 
 /// Market-regime classification, from observable volatility, spread and depth.
@@ -600,8 +583,9 @@ fn framing_weights(labels: &[&str], f: &Features) -> Vec<f64> {
 fn score(name: &str, levels: usize, f: &Features, call: &JevCall) -> Verdict {
     let fraction = match name {
         "size_factor" => size_fraction(f, call),
-        "level" => risk_fraction(f, call),
+        "level" => risk_fraction(f),
         "severity" => severity_fraction(f),
+        fit if fit.starts_with("fit_") => rank_fit(&fit["fit_".len()..], f),
         _ => stable(call, name, 0.25, 0.75),
     };
     score_distribution(levels, fraction.clamp(0.0, 1.0))
@@ -615,7 +599,7 @@ fn size_fraction(f: &Features, call: &JevCall) -> f64 {
 }
 
 /// Risk, 0..=1, as the maximum of whichever domain pressures are present.
-fn risk_fraction(f: &Features, call: &JevCall) -> f64 {
+fn risk_fraction(f: &Features) -> f64 {
     let mut risk: f64 = 0.08;
     let hours = f.num("hours_to_event").unwrap_or(99.0);
     if (0.0..=thresholds::EVENT_IMMINENT_HOURS).contains(&hours) {
@@ -641,7 +625,7 @@ fn risk_fraction(f: &Features, call: &JevCall) -> f64 {
     if battery_cycles_near_budget(f) {
         risk = risk.max(0.58);
     }
-    if prior_any_check_failed(call) {
+    if any_check_fails(f) {
         risk = risk.max(0.55);
     }
     risk
@@ -704,7 +688,7 @@ fn score_distribution(levels: usize, fraction: f64) -> Verdict {
     let upper = (lower + 1).min(levels - 1);
     let frac = exact - lower as f64;
 
-    let mut probabilities: BTreeMap<u32, f64> = BTreeMap::new();
+    let mut probabilities: BTreeMap<u32, f64> = (0..levels as u32).map(|i| (i, 0.0)).collect();
     if lower == upper {
         probabilities.insert(lower as u32, 1.0);
     } else {
@@ -724,7 +708,7 @@ fn stable(call: &JevCall, name: &str, lo: f64, hi: f64) -> f64 {
         .as_bytes()
         .iter()
         .chain(call.primitive.as_str().as_bytes())
-        .chain(call.context.as_bytes())
+        .chain(call.context().as_bytes())
     {
         h ^= *byte as u64;
         h = h.wrapping_mul(0x0000_0100_0000_01b3);

@@ -78,8 +78,9 @@ export function GateCard({ view, title }: { view: GateView; title: string }) {
 }
 
 /**
- * The whole ordering, read off one choice distribution — one call, N
- * candidates, and the margins come out with it.
+ * The ordering, read off one fit rating per candidate — one call, N
+ * questions on a shared rubric, sorted in code — so a second place and a
+ * margin mean what they say.
  */
 export function RankCard({ ranking, title }: { ranking: RankedView[]; title: string }) {
   return (
@@ -88,7 +89,7 @@ export function RankCard({ ranking, title }: { ranking: RankedView[]; title: str
         {ranking.map((entry) => (
           <li key={entry.id}>
             <div className="mono">
-              {words(entry.id)} <span className="dim">({pct(entry.p, 0)})</span>
+              {words(entry.id)} <span className="dim">(fit {pct(entry.fit, 0)})</span>
             </div>
             <div className="note dim" style={{ fontSize: 11.5 }}>
               {entry.rationale}
