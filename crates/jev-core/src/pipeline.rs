@@ -111,9 +111,26 @@ impl Pipeline {
         Self { jev: jev.clone(), name: name.into(), priors: Priors::new() }
     }
 
+    /// The same pipeline, tagging every call it makes with the decision it is
+    /// judging.
+    ///
+    /// One decision takes several calls — forex judges a candidate in two,
+    /// battery a day in three — so the id is what joins them back together:
+    /// every [`crate::CallRecord`] the pipeline writes carries it, and the
+    /// domain records the same id alongside the decision itself.
+    pub fn judging(mut self, decision: impl AsRef<str>) -> Self {
+        self.jev = self.jev.deciding(decision.as_ref());
+        self
+    }
+
     /// The pipeline's name.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// The decision every call is tagged with, if the pipeline was told.
+    pub fn decision(&self) -> Option<&str> {
+        self.jev.decision()
     }
 
     /// Everything the stages have produced so far.

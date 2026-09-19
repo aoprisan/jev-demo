@@ -161,7 +161,6 @@ fn terminal(
     jev: &Jev,
     summaries: &[jev_core::ExplainOut],
 ) -> String {
-    let (tokens, latency) = jev.audit().totals();
     let mut s = String::new();
     s.push_str(&bold("FOREX"));
     s.push_str(&dim(&format!(
@@ -265,12 +264,7 @@ fn terminal(
         s.push_str(&format!("    {}\n\n", wrap(&out.summary, 92, "    ")));
     }
 
-    s.push_str(&dim(&format!(
-        "{} calls, {} tokens, {} ms\n",
-        jev.audit().len(),
-        thousands(tokens as f64),
-        latency
-    )));
+    s.push_str(&dim(&crate::cost::terminal_line(jev)));
     s
 }
 
@@ -281,7 +275,6 @@ fn markdown(
     jev: &Jev,
     summaries: &[jev_core::ExplainOut],
 ) -> String {
-    let (tokens, _) = jev.audit().totals();
     let mut s = String::new();
     s.push_str("# Forex session\n\n");
     s.push_str(&format!(
@@ -380,13 +373,7 @@ fn markdown(
         s.push_str(&format!("**{}** — {}\n\n", out.for_audience.as_str(), out.summary));
     }
 
-    s.push_str(&format!(
-        "\n---\n\n{} typed calls, {} tokens, backend `{}`. Every call and its output is \
-         in `decisions.jsonl`.\n",
-        jev.audit().len(),
-        thousands(tokens as f64),
-        jev.backend(),
-    ));
+    s.push_str(&crate::cost::markdown_line(jev));
     s
 }
 

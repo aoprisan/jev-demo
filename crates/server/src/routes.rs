@@ -152,6 +152,14 @@ fn find(state: &AppState, id: &str) -> ApiResult<Arc<RunHandle>> {
     state.runs.get(id).ok_or_else(|| ApiError::NotFound(format!("no run {id}")))
 }
 
+/// What the run's calls cost, at the rates the server's environment names.
+///
+/// The rates are read per response rather than cached, so a desk can set its
+/// own prices without restarting the server.
+fn ledger(handle: &RunHandle) -> jev_core::CostLedger {
+    handle.audit.ledger(jev_core::Rates::from_env())
+}
+
 /// A finished run, or a `not_found` if it is still judging.
 fn finished(handle: &RunHandle) -> ApiResult<Arc<run::Outcome>> {
     handle
@@ -165,11 +173,7 @@ async fn get_run(
 ) -> ApiResult<Json<RunView>> {
     let handle = find(&state, &id)?;
     let summary = handle.summary();
-    let result = handle.outcome().map(|outcome| {
-        let (tokens, latency_ms) = handle.audit.totals();
-        let cost = Cost { calls: handle.audit.len(), tokens, latency_ms };
-        project::run_result(&outcome, cost)
-    });
+    let result = handle.outcome().map(|outcome| project::run_result(&outcome, &ledger(&handle)));
     Ok(Json(RunView { summary, result }))
 }
 
@@ -306,7 +310,7 @@ async fn fx_decision(
         .fx
         .as_ref()
         .ok_or_else(|| ApiError::NotFound(format!("run {id} has no forex desk")))?;
-    project::fx_detail(fx_run, index)
+    project::fx_detail(fx_run, index, &ledger(&handle))
         .map(Json)
         .ok_or_else(|| ApiError::NotFound(format!("run {id} has no decision {index}")))
 }
@@ -321,7 +325,7 @@ async fn battery_day(
         .battery
         .as_ref()
         .ok_or_else(|| ApiError::NotFound(format!("run {id} has no battery desk")))?;
-    project::battery_detail(battery_run, day)
+    project::battery_detail(battery_run, day, &ledger(&handle))
         .map(Json)
         .ok_or_else(|| ApiError::NotFound(format!("run {id} has no day {day}")))
 }

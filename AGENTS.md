@@ -36,4 +36,4 @@ History uses concise, scope-prefixed subjects such as `server: ...` and `ui: ...
 
 ## Architecture & Configuration
 
-Keep numerical calculations in deterministic domain code and judgments in typed primitives. Never silently accept invalid model outputs. Live runs require `TYPESAFE_API_KEY`; keep credentials out of commits and use mock commands for routine development.
+Keep numerical calculations in deterministic domain code and judgments in typed primitives. Tag every pipeline with the decision it judges (`Pipeline::judging(id)`) so the audit log stays joinable to the trade, and render any dollar figure derived from `jev-core::cost` as the estimate it is. Never silently accept invalid model outputs. Live runs require `TYPESAFE_API_KEY`; keep credentials out of commits and use mock commands for routine development.

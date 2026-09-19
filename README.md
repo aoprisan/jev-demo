@@ -240,8 +240,23 @@ Both, then a single `Explain` call summarising the whole day for Compliance.
 
 Every run writes `out/<domain>/report.md` and `out/<domain>/decisions.jsonl` —
 one JSON object per primitive call, carrying the state, the questions asked, the
-verdicts returned, the typed output composed, and the tokens and latency it
-cost.
+verdicts returned, the typed output composed, the tokens and latency it cost,
+and the `decision` it judged.
+
+That last field is the join key. A trade is not one call: forex judges a
+candidate in two and battery a day in three, so every call a pipeline makes
+carries the same `decision` id — `fx:0007`, `battery:0042` — and the API's
+decision row carries it back under `decision_id`. Grouping the log by it gives
+the calls, the tokens and the estimated cost of one trade:
+
+```sh
+jq -r '.decision' out/fx/decisions.jsonl | sort | uniq -c | head
+```
+
+The demo's replays judge the same candidate again in a changed world, so they
+name decisions of their own (`fx:replay:with-event`) rather than being totalled
+onto the session's. The report's run-level `Explain` calls judge no one
+decision and carry nothing.
 
 ---
 
@@ -268,7 +283,7 @@ behind it rather than a spinner. Then:
 | `GET /api/runs/{id}` | the summary, and the whole result once it is done |
 | `GET /api/runs/{id}/fx/decisions/{i}` | one candidate: the features Jev read, all four stages, the review flag, both fills |
 | `GET /api/runs/{id}/battery/days/{d}` | one day: all three schedules, all five stages, the review flag, both executions |
-| `GET /api/runs/{id}/calls` | the audit log, paged; `/calls/{i}` is one call in full |
+| `GET /api/runs/{id}/calls` | the audit log, paged, each row tagged with the decision it judged; `/calls/{i}` is one call in full |
 | `GET /api/runs/{id}/decisions.jsonl` | the audit log as the CLI writes it, one object per line |
 | `GET /api/runs/{id}/report` | `report.md`, byte for byte |
 | `GET /api/prompts`, `/api/schemas` | the standing guidance and the output schemas |
@@ -435,5 +450,26 @@ same two. Adding questions to a call barely moves its latency, so this is
 roughly half the wall-clock of one call per stage for the same judgments. The
 replay at the end of each demo judges one more day twice, so `decisions.jsonl`
 carries a handful more lines than the figure the report prints.
+
+Each report ends with what that came to:
+
+```
+430 calls, 648,242 tokens, 0 ms, est. $2.29 ($0.0106 per decision over 214
+decisions; $3.00/$15.00 per Mtok in/out, assumed)
+```
+
+The calls, the tokens and the latency are measured. **The dollars are an
+estimate, not a bill**: a `--mock` run is answered offline and nothing is
+charged for it, and System One's price list is not part of this repository, so
+`Rates::ASSUMED` stands in at $3.00 per million input tokens and $15.00 per
+million output. Set `JEV_USD_PER_MTOK_IN` and `JEV_USD_PER_MTOK_OUT` to a
+desk's own contracted prices and every figure — the report line, the API's
+`cost` block, the per-decision column in the browser — follows. Anything
+derived from the stand-in prices says `assumed`.
+
+The per-decision figure is the point of tagging each call with its decision:
+what a desk pays to have one trade judged, at whatever rate it pays, is the
+number that decides whether the judgment layer is worth running. Run-level
+`Explain` calls are in the run's total but not in the per-decision mean.
 
 Use `--limit N` to judge only the first N days when running live.

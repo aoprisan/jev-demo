@@ -40,9 +40,10 @@ pub async fn fx_event_day(
         ))
     );
 
-    let with_event = judge_fx(jev, world, &candidate, params).await?;
+    let with_event = judge_fx(jev, world, &candidate, params, "fx:replay:with-event").await?;
     let without = fx::without_events_on(world, candidate.t.day);
-    let without_event = judge_fx(jev, &without, &candidate, params).await?;
+    let without_event =
+        judge_fx(jev, &without, &candidate, params, "fx:replay:without-event").await?;
 
     // The prices are untouched, so the solver's proposal is identical.
     println!(
@@ -77,11 +78,12 @@ async fn judge_fx(
     world: &FxWorld,
     candidate: &fx::TradeCandidate,
     params: &fx::StrategyParams,
+    decision: &str,
 ) -> Result<(GateOut, String, u8)> {
     let bars = &world.series_for(candidate.pair).bars;
     let input = fx::build_input(world, bars, candidate, params, &world.book);
     let hours = fx::features::event_label(&input.features);
-    let mut pipeline = jev_core::Pipeline::new(jev, "fx-replay");
+    let mut pipeline = jev_core::Pipeline::new(jev, "fx-replay").judging(decision);
     let judgment = fx::judge(&mut pipeline, &input, candidate)
         .await
         .context("judging the replayed fx candidate")?;
@@ -97,15 +99,16 @@ pub async fn battery_notice_day(jev: &Jev, world: &BatteryWorld, cli: &Cli) -> R
     };
 
     let quiet_world = battery::without_grid_notices(world, day);
-    let quiet =
-        battery::judge_day(jev, &quiet_world, day).await.context("judging the quiet replay day")?;
+    let quiet = battery::judge_day_as(jev, &quiet_world, day, "battery:replay:quiet")
+        .await
+        .context("judging the quiet replay day")?;
 
     let Some((from, to)) = quiet.chosen().discharge_block() else {
         println!("{}", dim("the chosen schedule does not discharge; skipping the replay"));
         return Ok(());
     };
     let noticed_world = battery::with_grid_notice(world, day, from, to);
-    let noticed = battery::judge_day(jev, &noticed_world, day)
+    let noticed = battery::judge_day_as(jev, &noticed_world, day, "battery:replay:noticed")
         .await
         .context("judging the noticed replay day")?;
 

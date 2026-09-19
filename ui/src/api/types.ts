@@ -52,11 +52,30 @@ export interface RunResult {
   cost: Cost;
 }
 
-/** What the judgment layer cost. */
+/**
+ * What the judgment layer cost.
+ *
+ * The calls, tokens and latency are measured; `est_usd` is an estimate at
+ * `rates`, since the offline backend bills nothing and System One's price list
+ * is not in the repository. It answers what the same calls would cost.
+ */
 export interface Cost {
   calls: number;
   tokens: number;
+  input_tokens: number;
+  output_tokens: number;
   latency_ms: number;
+  est_usd: number;
+  est_usd_per_decision: number;
+  decisions: number;
+  rates: RatesView;
+}
+
+/** The per-million-token prices behind an estimate. */
+export interface RatesView {
+  input_usd_per_mtok: number;
+  output_usd_per_mtok: number;
+  assumed: boolean;
 }
 
 /** An Explain output as the UI shows it. */
@@ -169,6 +188,10 @@ export interface EquityPoint {
 /** One candidate, its judgment and what each book did with it. */
 export interface FxDecisionRow {
   index: number;
+  decision_id: string;
+  calls: number;
+  tokens: number;
+  est_usd: number;
   day: number;
   hour: number;
   date: string;
@@ -323,6 +346,10 @@ export interface MarginPoint {
 /** One day: what the solver offered, what Jev decided, what each desk ran. */
 export interface BatteryDayRow {
   day: number;
+  decision_id: string;
+  calls: number;
+  tokens: number;
+  est_usd: number;
   date: string;
   regime: string;
   regime_confidence: number;
@@ -433,6 +460,7 @@ export interface CallRow {
   backend: string;
   primitive: string;
   stage: string | null;
+  decision: string | null;
   model: string;
   asks: number;
   input_tokens: number | null;

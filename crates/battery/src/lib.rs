@@ -135,12 +135,36 @@ pub async fn run_session(
     Ok(BatterySession { seed: world.seed, days, solver_only, gated })
 }
 
-/// Solve, judge and execute one day.
+/// The audit-log id of one day's decision.
+///
+/// A day is judged in three calls, and all three carry this string in
+/// `CallRecord::decision`. The API's day row carries the same id under
+/// `decision_id`, so the calls a day made — and what they cost — can be
+/// totalled back onto the day itself.
+pub fn decision_id(day: u32) -> String {
+    format!("battery:{day:04}")
+}
+
+/// Solve, judge and execute one day, tagging its calls with the session's id
+/// for that day.
 pub async fn judge_day(jev: &Jev, world: &BatteryWorld, day: u32) -> Result<DayRecord> {
+    judge_day_as(jev, world, day, &decision_id(day)).await
+}
+
+/// The same, under an explicit audit-log id.
+///
+/// The replays judge one day twice in two different worlds, so they name their
+/// own decisions rather than colliding on the day's.
+pub async fn judge_day_as(
+    jev: &Jev,
+    world: &BatteryWorld,
+    day: u32,
+    decision: &str,
+) -> Result<DayRecord> {
     let schedules = candidates(world.day_ahead_for(day), &world.asset, world.afrr_on(day));
     let input = build_input(world, day, &schedules);
 
-    let mut pipeline = Pipeline::new(jev, "battery");
+    let mut pipeline = Pipeline::new(jev, "battery").judging(decision);
     let (judgment, _post_rank) = judge(&mut pipeline, world, day, &schedules, &input).await?;
 
     let balanced = schedules

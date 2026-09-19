@@ -10,7 +10,7 @@
 import { useState } from "react";
 import { getFxDecision } from "../api/client";
 import type { FxBook, FxResult } from "../api/types";
-import { bps, num, pct, signed } from "../format";
+import { bps, num, pct, signed, usd } from "../format";
 import { useFetch } from "../hooks/useApi";
 import { Curve } from "./charts";
 import { ClassifyCard, GateCard, ScoreCard } from "./judgment";
@@ -282,6 +282,20 @@ function FxDecisionDrawer({
               <p className="reason">{data.review}</p>
             </Card>
           )}
+
+          <Card
+            title="what judging it cost"
+            note="every call tagged with this decision"
+          >
+            <KeyValue
+              rows={[
+                ["decision id", data.row.decision_id],
+                ["jev calls", num(data.row.calls)],
+                ["tokens", num(data.row.tokens)],
+                ["est. cost", usd(data.row.est_usd)],
+              ]}
+            />
+          </Card>
 
           <Card
             title="what the judgment layer read"

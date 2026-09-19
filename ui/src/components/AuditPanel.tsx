@@ -47,6 +47,7 @@ export function AuditPanel({ runId, calls }: { runId: string; calls: number }) {
                 <th>#</th>
                 <th>primitive</th>
                 <th>stage</th>
+                <th>decision</th>
                 <th>questions</th>
                 <th>backend</th>
                 <th>tokens</th>
@@ -64,6 +65,7 @@ export function AuditPanel({ runId, calls }: { runId: string; calls: number }) {
                   <td className="dim">{call.index}</td>
                   <td>{call.primitive}</td>
                   <td className="dim">{call.stage ?? "—"}</td>
+                  <td className="dim">{call.decision ?? "—"}</td>
                   <td>{call.asks}</td>
                   <td className="dim">{call.backend}</td>
                   <td>
